@@ -80,11 +80,13 @@ public final class KSPlayerMediaCache: NSObject, @unchecked Sendable {
     }
 
     public func key(for url: URL, headers: [String: String] = [:]) -> String {
-        let headerText = headers.map { key, value in
+        let normalizedHeaders: [(key: String, value: String)] = headers.map { key, value in
             (key.lowercased(), value)
-        }.sorted { lhs, rhs in
+        }
+        let sortedHeaders = normalizedHeaders.sorted { lhs, rhs in
             lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
-        }.map { key, value in
+        }
+        let headerText = sortedHeaders.map { key, value in
             "\(key)=\(value)"
         }.joined(separator: "&")
         let source = "\(url.absoluteString)\n\(headerText)"

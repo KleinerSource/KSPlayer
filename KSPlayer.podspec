@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
     s.license          = { :type => 'GPL-3.0', :file => 'LICENSE' }
     s.source           = { :git => 'https://github.com/kingslay/KSPlayer.git', :tag => s.version.to_s }
 
-    s.ios.deployment_target = '13.0'
+    s.ios.deployment_target = '13.4'
     s.osx.deployment_target = '10.15'
     # s.watchos.deployment_target = '2.0'
     s.tvos.deployment_target = '13.0'

@@ -22,7 +22,7 @@ public enum KSPlayerPreviewError: Error {
 
 extension AVAsset {
     func loadKSPlayerPreviewValues() async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             loadValuesAsynchronously(forKeys: ["tracks", "duration"]) {
                 for key in ["tracks", "duration"] {
                     var error: NSError?
