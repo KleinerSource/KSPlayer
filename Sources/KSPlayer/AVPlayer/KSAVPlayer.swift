@@ -407,7 +407,7 @@ extension KSAVPlayer: MediaPlayerProtocol {
     public func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame] {
         let asset = urlAsset
         try? await asset.loadKSPlayerPreviewValues()
-        try Task<Void, Never>.checkCancellation()
+        try Task<Never, Never>.checkCancellation()
         guard !asset.tracks(withMediaType: .video).isEmpty else { throw KSPlayerPreviewError.noVideoTrack }
         let duration = self.duration > 0 ? self.duration : asset.duration.seconds
         guard duration.isFinite, duration > 0 else { throw KSPlayerPreviewError.invalidDuration }
@@ -418,7 +418,7 @@ extension KSAVPlayer: MediaPlayerProtocol {
         let generator = asset.createImageGenerator()
         let handle = KSPlayerPreviewGenerationHandle()
         return try await withTaskCancellationHandler(operation: {
-            try Task<Void, Never>.checkCancellation()
+            try Task<Never, Never>.checkCancellation()
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled, !handle.isCancelled else {
                     continuation.resume(throwing: CancellationError())
