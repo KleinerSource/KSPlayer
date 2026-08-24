@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
 
     s.homepage         = 'https://github.com/kingslay/KSPlayer'
     s.authors = { 'kintan' => 'kingslay@icloud.com' }
-    s.license          = 'MIT'
+    s.license          = { :type => 'GPL-3.0', :file => 'LICENSE' }
     s.source           = { :git => 'https://github.com/kingslay/KSPlayer.git', :tag => s.version.to_s }
 
     s.ios.deployment_target = '13.0'
