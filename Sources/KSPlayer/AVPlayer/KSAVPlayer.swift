@@ -419,7 +419,7 @@ extension KSAVPlayer: MediaPlayerProtocol {
         let handle = KSPlayerPreviewGenerationHandle()
         return try await withTaskCancellationHandler(operation: {
             try Task<Never, Never>.checkCancellation()
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[KSPlayerPreviewFrame], Error>) in
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[KSPlayerPreviewFrame], Error>) in
                 guard !Task.isCancelled, !handle.isCancelled else {
                     continuation.resume(throwing: CancellationError())
                     return

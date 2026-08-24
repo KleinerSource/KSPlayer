@@ -297,7 +297,7 @@ public final class KSPlayerMediaCache: NSObject, @unchecked Sendable {
 
     private func isCacheable(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
-        !url.path.lowercased().hasSuffix(".m3u8")
+        return !url.path.lowercased().hasSuffix(".m3u8")
     }
 
     private func request(url: URL, headers: [String: String], range: KSPlayerMediaCacheRange) async throws -> (data: Data, response: HTTPURLResponse) {
