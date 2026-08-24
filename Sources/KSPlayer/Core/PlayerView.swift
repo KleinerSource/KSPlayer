@@ -49,6 +49,12 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
     public weak var delegate: ControllerDelegate?
     public let toolBar = PlayerToolBar()
     public let srtControl = SubtitleModel()
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+    private let previewView = KSPlayerPreviewView(frame: .zero)
+    private var previewTask: Task<Void, Never>?
+#endif
+    private var didHandleSliderRelease = false
+    private var isScrubbing = false
     // Listen to play time change
     public var playTimeDidChange: ((TimeInterval, TimeInterval) -> Void)?
     public var backBlock: (() -> Void)?
@@ -64,6 +70,10 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
         super.init(frame: frame)
         toolBar.timeSlider.delegate = self
         toolBar.addTarget(self, action: #selector(onButtonPressed(_:)))
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+        previewView.isHidden = true
+        addSubview(previewView)
+#endif
     }
 
     @available(*, unavailable)
@@ -157,13 +167,43 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
     // MARK: - KSSliderDelegate
 
     open func slider(value: Double, event: ControlEvents) {
+        if event == .touchDown {
+            didHandleSliderRelease = false
+            isScrubbing = true
+        } else if event == .touchUpInside {
+            guard !didHandleSliderRelease else { return }
+            didHandleSliderRelease = true
+            isScrubbing = false
+            DispatchQueue.main.async { [weak self] in
+                self?.didHandleSliderRelease = false
+            }
+        } else if event == .touchCancel {
+            didHandleSliderRelease = false
+            isScrubbing = false
+            toolBar.currentTime = playerLayer?.player.currentPlaybackTime ?? toolBar.currentTime
+        }
         if event == .valueChanged {
             toolBar.currentTime = value
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+            updatePreview(time: value)
+#endif
         } else if event == .touchUpInside {
             seek(time: value) { [weak self] _ in
                 self?.delegate?.playerController(seek: value)
             }
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+            updatePreview(time: value)
+            hidePreview(after: 0.35)
+#endif
         }
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+        if event == .touchDown {
+            previewView.isHidden = false
+            updatePreview(time: value)
+        } else if event == .touchCancel {
+            hidePreview(after: 0)
+        }
+#endif
     }
 
     // MARK: - KSPlayerLayerDelegate
@@ -174,6 +214,11 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
             totalTime = layer.player.duration
             toolBar.isSeekable = layer.player.seekable
             toolBar.playButton.isSelected = true
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+            Task { [weak layer] in
+                _ = try? await layer?.generatePreviewThumbnails()
+            }
+#endif
         } else if state == .playedToTheEnd || state == .paused || state == .error {
             toolBar.playButton.isSelected = false
         }
@@ -182,7 +227,9 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
     open func player(layer _: KSPlayerLayer, currentTime: TimeInterval, totalTime: TimeInterval) {
         delegate?.playerController(currentTime: currentTime, totalTime: totalTime)
         playTimeDidChange?(currentTime, totalTime)
-        toolBar.currentTime = currentTime
+        if !isScrubbing {
+            toolBar.currentTime = currentTime
+        }
         self.totalTime = totalTime
     }
 
@@ -194,6 +241,44 @@ open class PlayerView: UIView, KSPlayerLayerDelegate, KSSliderDelegate {
         delegate?.playerController(bufferedCount: bufferedCount, consumeTime: consumeTime)
     }
 }
+
+#if canImport(UIKit) && !os(tvOS) && !os(xrOS) || os(macOS)
+private extension PlayerView {
+    func updatePreview(time: TimeInterval) {
+        guard totalTime > 0, let playerLayer else {
+            previewView.isHidden = true
+            return
+        }
+        previewView.isHidden = false
+        let slider = toolBar.timeSlider
+        let ratio = max(0, min(1, time / totalTime))
+        let point = slider.convert(CGPoint(x: slider.bounds.width * ratio, y: 0), to: self)
+        previewView.frame = CGRect(x: point.x - 80, y: max(8, point.y - 118), width: 160, height: 106)
+        previewTask?.cancel()
+        previewTask = Task { [weak self, weak playerLayer] in
+            guard let self, let playerLayer else { return }
+            let image = await playerLayer.previewImage(at: time)
+            guard !Task.isCancelled else { return }
+            runOnMainThread { [weak self] in
+                guard let self else { return }
+                self.previewView.update(image: image, time: time)
+                self.previewView.isHidden = image == nil
+            }
+        }
+    }
+
+    func hidePreview(after delay: TimeInterval) {
+        previewTask?.cancel()
+        if delay == 0 {
+            previewView.isHidden = true
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.previewView.isHidden = true
+            }
+        }
+    }
+}
+#endif
 
 public extension PlayerView {
     var totalTime: TimeInterval {

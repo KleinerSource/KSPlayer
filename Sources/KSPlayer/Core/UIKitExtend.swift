@@ -21,7 +21,8 @@ public class KSSlider: UXSlider {
         addGestureRecognizer(panGesture)
         addTarget(self, action: #selector(progressSliderTouchBegan(_:)), for: .touchDown)
         addTarget(self, action: #selector(progressSliderValueChanged(_:)), for: .valueChanged)
-        addTarget(self, action: #selector(progressSliderTouchEnded(_:)), for: [.touchUpInside, .touchCancel, .touchUpOutside, .primaryActionTriggered])
+        addTarget(self, action: #selector(progressSliderTouchEnded(_:)), for: [.touchUpInside, .primaryActionTriggered])
+        addTarget(self, action: #selector(progressSliderTouchCancelled(_:)), for: [.touchCancel, .touchUpOutside])
     }
 
     @available(*, unavailable)
@@ -63,6 +64,13 @@ public class KSSlider: UXSlider {
         delegate?.slider(value: Double(sender.value), event: .touchUpInside)
     }
 
+    @objc private func progressSliderTouchCancelled(_ sender: KSSlider) {
+        guard isPlayable else { return }
+        tapGesture.isEnabled = true
+        panGesture.isEnabled = true
+        delegate?.slider(value: Double(sender.value), event: .touchCancel)
+    }
+
     @objc private func actionTapGesture(sender: UITapGestureRecognizer) {
         //        guard isPlayable else {
         //            return
@@ -85,6 +93,8 @@ public class KSSlider: UXSlider {
             delegate?.slider(value: Double(value), event: .touchDown)
         } else if sender.state == .ended {
             delegate?.slider(value: Double(value), event: .touchUpInside)
+        } else if sender.state == .cancelled || sender.state == .failed {
+            delegate?.slider(value: Double(value), event: .touchCancel)
         } else {
             delegate?.slider(value: Double(value), event: .valueChanged)
         }

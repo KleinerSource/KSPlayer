@@ -94,6 +94,9 @@ public protocol MediaPlayerProtocol: MediaPlayback {
     func enterBackground()
     func enterForeground()
     func thumbnailImageAtCurrentTime() async -> CGImage?
+    func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame]
+    func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame]
+    func previewImage(at time: TimeInterval) async -> CGImage?
     func tracks(mediaType: AVFoundation.AVMediaType) -> [MediaPlayerTrack]
     func select(track: some MediaPlayerTrack)
 }
@@ -101,6 +104,20 @@ public protocol MediaPlayerProtocol: MediaPlayback {
 public extension MediaPlayerProtocol {
     var nominalFrameRate: Float {
         tracks(mediaType: .video).first { $0.isEnabled }?.nominalFrameRate ?? 0
+    }
+
+    func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame] { [] }
+
+    func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame] {
+        let frames = try await generatePreviewThumbnails()
+        onUpdate(frames)
+        return frames
+    }
+
+    func previewImage(at time: TimeInterval) async -> CGImage? {
+        guard time.isFinite, time >= 0 else { return nil }
+        let frames = try? await generatePreviewThumbnails()
+        return frames?.min { abs($0.time - time) < abs($1.time - time) }?.image
     }
 }
 

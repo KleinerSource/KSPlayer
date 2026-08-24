@@ -501,6 +501,7 @@ public class KSSlider: NSSlider {
         super.init(frame: frameRect)
         target = self
         action = #selector(progressSliderTouchEnded(_:))
+        sendAction(on: [.leftMouseDown, .leftMouseDragged, .leftMouseUp])
     }
 
     @available(*, unavailable)
@@ -509,7 +510,17 @@ public class KSSlider: NSSlider {
     }
 
     @objc private func progressSliderTouchEnded(_ sender: KSSlider) {
-        if isUserInteractionEnabled {
+        guard isUserInteractionEnabled else { return }
+        if let event = NSApp.currentEvent {
+            switch event.type {
+            case .leftMouseDown:
+                delegate?.slider(value: Double(sender.floatValue), event: .touchDown)
+            case .leftMouseDragged:
+                delegate?.slider(value: Double(sender.floatValue), event: .valueChanged)
+            default:
+                delegate?.slider(value: Double(sender.floatValue), event: .touchUpInside)
+            }
+        } else {
             delegate?.slider(value: Double(sender.floatValue), event: .touchUpInside)
         }
     }

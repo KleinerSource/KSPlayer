@@ -558,26 +558,66 @@ struct VideoTimeShowView: View {
     @ObservedObject
     fileprivate var model: ControllerTimeModel
     fileprivate var timeFont: Font?
+    @State private var isScrubbing = false
+    @State private var previewFrame: KSPlayerPreviewFrame?
+    @State private var previewRequest = 0
     public var body: some View {
         if config.playerLayer?.player.seekable ?? false {
-            HStack {
-                Text(model.currentTime.toString(for: .minOrHour)).font(timeFont ?? .caption2.monospacedDigit())
-                Slider(value: Binding {
-                    Float(model.currentTime)
-                } set: { newValue, _ in
-                    model.currentTime = Int(newValue)
-                }, in: 0 ... Float(model.totalTime)) { onEditingChanged in
-                    if onEditingChanged {
-                        config.playerLayer?.pause()
-                    } else {
-                        config.seek(time: TimeInterval(model.currentTime))
+            ZStack(alignment: .bottom) {
+                HStack {
+                    Text(model.currentTime.toString(for: .minOrHour)).font(timeFont ?? .caption2.monospacedDigit())
+                    Slider(value: Binding {
+                        Float(model.currentTime)
+                    } set: { newValue, _ in
+                        model.currentTime = Int(newValue)
+                    }, in: 0 ... Float(model.totalTime)) { onEditingChanged in
+                        if onEditingChanged {
+                            isScrubbing = true
+                            previewRequest += 1
+                            previewFrame = nil
+                            config.playerLayer?.pause()
+                        } else {
+                            isScrubbing = false
+                            previewRequest += 1
+                            config.seek(time: TimeInterval(model.currentTime))
+                            previewFrame = nil
+                        }
                     }
+                    .frame(maxHeight: 20)
+                    #if os(xrOS)
+                        .tint(.white.opacity(0.8))
+                    #endif
+#if !os(tvOS) && !os(xrOS)
+                    .onChange(of: model.currentTime) { newValue in
+                        guard isScrubbing, let layer = config.playerLayer else { return }
+                        let request = previewRequest + 1
+                        previewRequest = request
+                        Task { @MainActor in
+                            let image = await layer.previewImage(at: TimeInterval(newValue))
+                            guard let image, isScrubbing, previewRequest == request else { return }
+                            previewFrame = KSPlayerPreviewFrame(time: TimeInterval(newValue), image: image)
+                        }
+                    }
+#endif
+                    Text((model.totalTime).toString(for: .minOrHour)).font(timeFont ?? .caption2.monospacedDigit())
                 }
-                .frame(maxHeight: 20)
-                #if os(xrOS)
-                    .tint(.white.opacity(0.8))
-                #endif
-                Text((model.totalTime).toString(for: .minOrHour)).font(timeFont ?? .caption2.monospacedDigit())
+#if !os(tvOS) && !os(xrOS)
+                if isScrubbing, let previewFrame {
+                    VStack(spacing: 3) {
+                        Image(decorative: previewFrame.image, scale: 1)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 160, height: 90)
+                            .clipped()
+                        Text(previewFrame.time.toString(for: .minOrHour))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(.white)
+                    }
+                    .padding(4)
+                    .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
+                    .offset(y: -26)
+                }
+#endif
             }
             .font(.system(.title2))
         } else {

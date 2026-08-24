@@ -15,6 +15,15 @@ import UIKit
 public struct FFThumbnail {
     public let image: UIImage
     public let time: TimeInterval
+
+    var cgImage: CGImage? {
+        #if canImport(UIKit)
+        image.cgImage
+        #else
+        var rect = CGRect.zero
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        #endif
+    }
 }
 
 public protocol ThumbnailControllerDelegate: AnyObject {
@@ -25,16 +34,25 @@ public class ThumbnailController {
     public weak var delegate: ThumbnailControllerDelegate?
     private let thumbnailCount: Int
     public init(thumbnailCount: Int = 100) {
-        self.thumbnailCount = thumbnailCount
+        self.thumbnailCount = max(1, thumbnailCount)
     }
 
-    public func generateThumbnail(for url: URL, thumbWidth: Int32 = 240) async throws -> [FFThumbnail] {
-        try await Task {
-            try getPeeks(for: url, thumbWidth: thumbWidth)
-        }.value
+    public func generateThumbnail(for url: URL, thumbWidth: Int32 = 240,
+                                  onUpdate: (([FFThumbnail]) -> Void)? = nil) async throws -> [FFThumbnail]
+    {
+        let operation = Task {
+            try await getPeeks(for: url, thumbWidth: thumbWidth, onUpdate: onUpdate)
+        }
+        return try await withTaskCancellationHandler(operation: {
+            try await operation.value
+        }, onCancel: {
+            operation.cancel()
+        })
     }
 
-    private func getPeeks(for url: URL, thumbWidth: Int32 = 240) throws -> [FFThumbnail] {
+    private func getPeeks(for url: URL, thumbWidth: Int32 = 240,
+                          onUpdate: (([FFThumbnail]) -> Void)? = nil) async throws -> [FFThumbnail]
+    {
         let urlString: String
         if url.isFileURL {
             urlString = url.path
@@ -75,14 +93,26 @@ public class ThumbnailController {
             var codecContext: UnsafeMutablePointer<AVCodecContext>? = codecContext
             avcodec_free_context(&codecContext)
         }
+        guard thumbWidth > 0, codecContext.pointee.width > 0, codecContext.pointee.height > 0 else {
+            throw NSError(description: "Invalid video dimensions")
+        }
         let thumbHeight = thumbWidth * codecContext.pointee.height / codecContext.pointee.width
         let reScale = VideoSwresample(dstWidth: thumbWidth, dstHeight: thumbHeight, isDovi: false)
+        defer { reScale.shutdown() }
 //        let duration = formatCtx.pointee.duration
         // 因为是针对视频流来进行seek。所以不能直接取formatCtx的duration
+        guard formatCtx.pointee.duration > 0, videoStream.pointee.time_base.den != 0 else {
+            throw NSError(description: "Invalid video duration")
+        }
         let duration = av_rescale_q(formatCtx.pointee.duration,
                                     AVRational(num: 1, den: AV_TIME_BASE), videoStream.pointee.time_base)
-        let interval = duration / Int64(thumbnailCount)
+        guard duration > 0 else {
+            throw NSError(description: "Invalid video duration")
+        }
+        let sampleCount = max(1, min(thumbnailCount, Int(min(Int64(Int.max), duration))))
+        let interval = max(1, duration / Int64(sampleCount))
         var packet = AVPacket()
+        defer { av_packet_unref(&packet) }
         let timeBase = Timebase(videoStream.pointee.time_base)
         var frame = av_frame_alloc()
         defer {
@@ -91,7 +121,8 @@ public class ThumbnailController {
         guard let frame else {
             throw NSError(description: "can not av_frame_alloc")
         }
-        for i in 0 ..< thumbnailCount {
+        for i in 0 ..< sampleCount {
+            try Task.checkCancellation()
             let seek_pos = interval * Int64(i) + videoStream.pointee.start_time
             avcodec_flush_buffers(codecContext)
             result = av_seek_frame(formatCtx, Int32(videoStreamIndex), seek_pos, AVSEEK_FLAG_BACKWARD)
@@ -100,6 +131,7 @@ public class ThumbnailController {
             }
             avcodec_flush_buffers(codecContext)
             while av_read_frame(formatCtx, &packet) >= 0 {
+                try Task.checkCancellation()
                 if packet.stream_index == Int32(videoStreamIndex) {
                     if avcodec_send_packet(codecContext, &packet) < 0 {
                         break
@@ -119,14 +151,13 @@ public class ThumbnailController {
                     if let image {
                         let thumbnail = FFThumbnail(image: image, time: timeBase.cmtime(for: currentTimeStamp).seconds)
                         thumbnails.append(thumbnail)
-                        delegate?.didUpdate(thumbnails: thumbnails, forFile: url, withProgress: i)
+                        delegate?.didUpdate(thumbnails: thumbnails, forFile: url, withProgress: (i + 1) * 100 / sampleCount)
+                        onUpdate?(thumbnails)
                     }
                     break
                 }
             }
         }
-        av_packet_unref(&packet)
-        reScale.shutdown()
         return thumbnails
     }
 }

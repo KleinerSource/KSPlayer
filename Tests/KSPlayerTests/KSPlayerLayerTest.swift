@@ -9,19 +9,10 @@ class KSPlayerLayerTest: XCTestCase {
         KSOptions.isAccurateSeek = true
     }
 
-    func testPlayerLayer() {
-        if let path = Bundle(for: type(of: self)).path(forResource: "h264", ofType: "MP4") {
-            set(path: path)
-        }
-//        if let path = Bundle(for: type(of: self)).path(forResource: "google-help-vr", ofType: "mp4") {
-//            set(path: path)
-//        }
-        if let path = Bundle(for: type(of: self)).path(forResource: "mjpeg", ofType: "flac") {
-            set(path: path)
-        }
-        if let path = Bundle(for: type(of: self)).path(forResource: "hevc", ofType: "mkv") {
-            set(path: path)
-        }
+    func testPlayerLayer() throws {
+        let url = try DeterministicMediaFixture.videoURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        set(path: url.path)
     }
 
     func set(path: String) {

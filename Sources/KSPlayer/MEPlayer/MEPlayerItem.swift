@@ -170,6 +170,7 @@ public final class MEPlayerItem: Sendable {
 
 extension MEPlayerItem {
     private func openThread() {
+        releaseCustomIO()
         avformat_close_input(&self.formatCtx)
         formatCtx = avformat_alloc_context()
         guard let formatCtx else {
@@ -197,9 +198,16 @@ extension MEPlayerItem {
 //        }
         setHttpProxy()
         var avOptions = options.formatContextOptions.avOptions
-        if let pb = options.process(url: url) {
+        var customIO = options.process(url: url)
+        if customIO == nil, options.mediaCacheEnabled {
+            let cache = KSPlayerMediaCache.shared
+            cache.maximumCapacity = options.mediaCacheMaximumCapacity
+            customIO = cache.makeFFmpegIOContext(url: url, headers: options.mediaCacheHeaders)
+        }
+        if let pb = customIO {
             // 如果要自定义协议的话，那就用avio_alloc_context，对formatCtx.pointee.pb赋值
             formatCtx.pointee.pb = pb.getContext()
+            formatCtx.pointee.flags |= AVFMT_FLAG_CUSTOM_IO
         }
         let urlString: String
         if url.isFileURL {
@@ -211,11 +219,14 @@ extension MEPlayerItem {
         av_dict_free(&avOptions)
         if result == AVError.eof.code {
             state = .finished
+            releaseCustomIO()
+            avformat_close_input(&self.formatCtx)
             delegate?.sourceDidFinished()
             return
         }
         guard result == 0 else {
             error = .init(errorCode: .formatOpenInput, avErrorCode: result)
+            releaseCustomIO()
             avformat_close_input(&self.formatCtx)
             return
         }
@@ -233,6 +244,7 @@ extension MEPlayerItem {
         result = avformat_find_stream_info(formatCtx, nil)
         guard result == 0 else {
             error = .init(errorCode: .formatFindStreamInfo, avErrorCode: result)
+            releaseCustomIO()
             avformat_close_input(&self.formatCtx)
             return
         }
@@ -630,6 +642,17 @@ extension MEPlayerItem {
             condition.signal()
         }
     }
+
+    private func releaseCustomIO() {
+        guard let formatCtx = self.formatCtx,
+              (formatCtx.pointee.flags & AVFMT_FLAG_CUSTOM_IO) != 0,
+              let pb = formatCtx.pointee.pb,
+              let opaque = pb.pointee.opaque
+        else { return }
+        pb.pointee.opaque = nil
+        let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque).takeRetainedValue()
+        value.close()
+    }
 }
 
 // MARK: MediaPlayback
@@ -672,10 +695,7 @@ extension MEPlayerItem: MediaPlayback {
             self.allPlayerItemTracks.forEach { $0.shutdown() }
             KSLog("清空formatCtx")
             // 自定义的协议才会av_class为空
-            if let formatCtx = self.formatCtx, (formatCtx.pointee.flags & AVFMT_FLAG_CUSTOM_IO) != 0, let opaque = formatCtx.pointee.pb.pointee.opaque {
-                let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque).takeRetainedValue()
-                value.close()
-            }
+            self.releaseCustomIO()
             // 不要自己来释放pb。不然第二次播放同一个url会出问题
 //            self.formatCtx?.pointee.pb = nil
             self.formatCtx?.pointee.interrupt_callback.opaque = nil

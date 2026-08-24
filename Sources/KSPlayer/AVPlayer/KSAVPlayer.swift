@@ -79,6 +79,9 @@ public class KSAVPlayer {
 
     private let playerView = KSAVPlayerView()
     private var urlAsset: AVURLAsset
+    private var sourceURL: URL
+    private var cacheLoader: KSPlayerMediaCacheResourceLoader?
+    private var mediaCachePrepareTask: Task<Void, Never>?
     private var shouldSeekTo = TimeInterval(0)
     private var playerLooper: AVPlayerLooper?
     private var statusObservation: NSKeyValueObservation?
@@ -214,6 +217,7 @@ public class KSAVPlayer {
     public required init(url: URL, options: KSOptions) {
         KSOptions.setAudioSession()
         urlAsset = AVURLAsset(url: url, options: options.avOptions)
+        sourceURL = url
         self.options = options
         itemObservation = player.observe(\.currentItem) { [weak self] player, _ in
             guard let self else { return }
@@ -396,6 +400,75 @@ extension KSAVPlayer: MediaPlayerProtocol {
         }
     }
 
+    public func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame] {
+        try await generatePreviewThumbnails(onUpdate: { _ in })
+    }
+
+    public func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame] {
+        let asset = urlAsset
+        try? await asset.loadKSPlayerPreviewValues()
+        try Task.checkCancellation()
+        guard !asset.tracks(withMediaType: .video).isEmpty else { throw KSPlayerPreviewError.noVideoTrack }
+        let duration = self.duration > 0 ? self.duration : asset.duration.seconds
+        guard duration.isFinite, duration > 0 else { throw KSPlayerPreviewError.invalidDuration }
+        let count = 100
+        let times = (0 ..< count).map {
+            CMTime(seconds: duration * (Double($0) + 0.5) / Double(count), preferredTimescale: 600)
+        }
+        let generator = asset.createImageGenerator()
+        let handle = KSPlayerPreviewGenerationHandle()
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled, !handle.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                let newState = KSPlayerPreviewGenerationState(count: times.count, update: onUpdate) { result in
+                    continuation.resume(with: result)
+                }
+                handle.set(newState)
+                if handle.isCancelled {
+                    return
+                }
+                generator.generateCGImagesAsynchronously(forTimes: times.map { NSValue(time: $0) }) { requestedTime, image, actualTime, _, _ in
+                    let cgImage = image.map {
+                        KSPlayerPreviewFrame(time: actualTime.seconds > 0 ? actualTime.seconds : requestedTime.seconds,
+                                             image: scaledKSPlayerPreviewImage($0))
+                    }
+                    newState.append(cgImage)
+                }
+            }
+        }, onCancel: {
+            handle.cancel()
+            generator.cancelAllCGImageGeneration()
+        })
+    }
+
+    public func previewImage(at time: TimeInterval) async -> CGImage? {
+        guard time.isFinite, time >= 0 else { return nil }
+        let asset = urlAsset
+        try? await asset.loadKSPlayerPreviewValues()
+        guard !asset.tracks(withMediaType: .video).isEmpty else { return nil }
+        let generator = asset.createImageGenerator()
+        let state = KSPlayerPreviewImageState()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                state.set(continuation)
+                guard !Task.isCancelled else {
+                    state.finish(nil)
+                    return
+                }
+                generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: CMTime(seconds: time, preferredTimescale: 600))]) { _, image, _, _, _ in
+                    state.finish(image.map { scaledKSPlayerPreviewImage($0) })
+                }
+            }
+        }, onCancel: {
+            generator.cancelAllCGImageGeneration()
+            state.finish(nil)
+        })
+    }
+
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
         let time = max(time, 0)
         shouldSeekTo = time
@@ -415,10 +488,31 @@ extension KSAVPlayer: MediaPlayerProtocol {
     public func prepareToPlay() {
         KSLog("prepareToPlay \(self)")
         options.prepareTime = CACurrentMediaTime()
+        if options.mediaCacheEnabled {
+            mediaCachePrepareTask?.cancel()
+            let url = sourceURL
+            let headers = options.mediaCacheHeaders
+            let maximumCapacity = options.mediaCacheMaximumCapacity
+            mediaCachePrepareTask = Task { [weak self] in
+                guard let self else { return }
+                let cache = KSPlayerMediaCache.shared
+                cache.maximumCapacity = maximumCapacity
+                let cachedAsset = await cache.makeAVAsset(url: url, headers: headers)
+                guard !Task.isCancelled else { return }
+                self.cacheLoader = cachedAsset?.loader
+                self.urlAsset = cachedAsset?.asset ?? AVURLAsset(url: url, options: self.options.avOptions)
+                self.prepare(asset: self.urlAsset)
+            }
+        } else {
+            prepare(asset: urlAsset)
+        }
+    }
+
+    private func prepare(asset: AVURLAsset) {
         runOnMainThread { [weak self] in
             guard let self else { return }
             self.bufferingProgress = 0
-            let playerItem = AVPlayerItem(asset: self.urlAsset)
+            let playerItem = AVPlayerItem(asset: asset)
             self.options.openTime = CACurrentMediaTime()
             self.replaceCurrentItem(playerItem: playerItem)
             self.player.actionAtItemEnd = .pause
@@ -441,7 +535,13 @@ extension KSAVPlayer: MediaPlayerProtocol {
         isReadyToPlay = false
         playbackState = .stopped
         loadState = .idle
+        mediaCachePrepareTask?.cancel()
+        mediaCachePrepareTask = nil
         urlAsset.cancelLoading()
+        if cacheLoader != nil {
+            urlAsset.resourceLoader.setDelegate(nil, queue: nil)
+            cacheLoader = nil
+        }
         replaceCurrentItem(playerItem: nil)
     }
 
@@ -449,6 +549,7 @@ extension KSAVPlayer: MediaPlayerProtocol {
         KSLog("replaceUrl \(self)")
         shutdown()
         urlAsset = AVURLAsset(url: url, options: options.avOptions)
+        sourceURL = url
         self.options = options
     }
 
@@ -572,6 +673,7 @@ class AVMediaPlayerTrack: MediaPlayerTrack {
 public extension AVAsset {
     func createImageGenerator() -> AVAssetImageGenerator {
         let imageGenerator = AVAssetImageGenerator(asset: self)
+        imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.requestedTimeToleranceBefore = .zero
         imageGenerator.requestedTimeToleranceAfter = .zero
         return imageGenerator

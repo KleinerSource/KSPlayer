@@ -44,6 +44,10 @@ open class KSOptions {
     // ffmpeg only cache http
     // 这个开关不能用，因为ff_tempfile: Cannot open temporary file
     public var cache = false
+    /// 点播媒体磁盘预缓存。默认关闭；不影响上面的 FFmpeg `cache` 语义。
+    public var mediaCacheEnabled = KSOptions.isMediaCacheEnabled
+    /// 磁盘媒体缓存的最大容量，默认 512 MiB。
+    public var mediaCacheMaximumCapacity = KSOptions.mediaCacheMaximumCapacity
     //  record stream
     public var outputURL: URL?
     public var avOptions = [String: Any]()
@@ -454,6 +458,20 @@ open class KSOptions {
     open func process(url _: URL) -> AbstractAVIOContext? {
         nil
     }
+
+    internal var mediaCacheHeaders: [String: String] {
+        var headers = avOptions["AVURLAssetHTTPHeaderFieldsKey"] as? [String: String] ?? [:]
+        if let cookies = avOptions[AVURLAssetHTTPCookiesKey] as? [HTTPCookie], !cookies.isEmpty {
+            headers["Cookie"] = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        }
+        if let userAgent {
+            headers["User-Agent"] = userAgent
+        }
+        if let referer {
+            headers["Referer"] = referer
+        }
+        return headers
+    }
 }
 
 public enum VideoInterlacingType: String {
@@ -487,6 +505,10 @@ public extension KSOptions {
     static var canStartPictureInPictureAutomaticallyFromInline = true
     static var preferredFrame = true
     static var useSystemHTTPProxy = true
+    /// 是否启用点播媒体磁盘预缓存，默认关闭。
+    static var isMediaCacheEnabled = false
+    /// 点播媒体磁盘预缓存最大容量，默认 512 MiB。
+    static var mediaCacheMaximumCapacity: Int64 = 512 * 1024 * 1024
     /// 日志级别
     static var logLevel = LogLevel.warning
     static var logger: LogHandler = OSLog(lable: "KSPlayer")

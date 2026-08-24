@@ -3,31 +3,29 @@ import XCTest
 
 class KSMEPlayerTest: XCTestCase {
     @MainActor
-    func testPlaying() {
-        if let path = Bundle(for: type(of: self)).path(forResource: "h264", ofType: "mp4") {
-            let options = KSOptions()
-            let player = KSMEPlayer(url: URL(fileURLWithPath: path), options: options)
-            player.delegate = self
-            XCTAssertEqual(player.isPlaying, false)
-            player.play()
-            XCTAssertEqual(player.isPlaying, true)
-            player.pause()
-            XCTAssertEqual(player.isPlaying, false)
-        }
+    func testPlaying() throws {
+        let url = try DeterministicMediaFixture.videoURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = KSMEPlayer(url: url, options: KSOptions())
+        player.delegate = self
+        XCTAssertEqual(player.isPlaying, false)
+        player.play()
+        XCTAssertEqual(player.isPlaying, true)
+        player.pause()
+        XCTAssertEqual(player.isPlaying, false)
     }
 
     @MainActor
-    func testAutoPlay() {
-        if let path = Bundle(for: type(of: self)).path(forResource: "h264", ofType: "mp4") {
-            let options = KSOptions()
-            let player = KSMEPlayer(url: URL(fileURLWithPath: path), options: options)
-            player.delegate = self
-            XCTAssertEqual(player.isPlaying, false)
-            player.play()
-            XCTAssertEqual(player.isPlaying, true)
-            player.pause()
-            XCTAssertEqual(player.isPlaying, false)
-        }
+    func testAutoPlay() throws {
+        let url = try DeterministicMediaFixture.videoURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = KSMEPlayer(url: url, options: KSOptions())
+        player.delegate = self
+        XCTAssertEqual(player.isPlaying, false)
+        player.play()
+        XCTAssertEqual(player.isPlaying, true)
+        player.pause()
+        XCTAssertEqual(player.isPlaying, false)
     }
 }
 

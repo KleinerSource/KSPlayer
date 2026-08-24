@@ -91,6 +91,11 @@ open class KSPlayerLayer: NSObject {
         }
     }
 
+    /// 已经生成的缩略图，可用于自定义进度条或 SwiftUI 视图。
+    @Published
+    public private(set) var previewFrames = [KSPlayerPreviewFrame]()
+    private var previewTask: Task<[KSPlayerPreviewFrame], Error>?
+
     public private(set) var options: KSOptions
 
     public var player: MediaPlayerProtocol {
@@ -317,6 +322,8 @@ open class KSPlayerLayer: NSObject {
 
     public func stop() {
         KSLog("stop Player")
+        cancelPreviewThumbnails()
+        previewFrames.removeAll()
         state = .initialized
         player.shutdown()
         bufferedCount = 0
@@ -329,9 +336,53 @@ open class KSPlayerLayer: NSObject {
         }
     }
 
+    public func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame] {
+        previewTask?.cancel()
+        let task = Task { [weak self] in
+            guard let self else { return [KSPlayerPreviewFrame]() }
+            let frames = try await self.player.generatePreviewThumbnails { [weak self] frames in
+                runOnMainThread { [weak self] in
+                    self?.previewFrames = frames.sorted { $0.time < $1.time }
+                }
+            }.sorted { $0.time < $1.time }
+            if !Task.isCancelled {
+                runOnMainThread { [weak self] in
+                    self?.previewFrames = frames
+                }
+            }
+            return frames
+        }
+        previewTask = task
+        return try await task.value
+    }
+
+    public func cancelPreviewThumbnails() {
+        previewTask?.cancel()
+        previewTask = nil
+    }
+
+    public func previewImage(at time: TimeInterval) async -> CGImage? {
+        guard time.isFinite, time >= 0 else { return nil }
+        if let frame = previewFrames.min(by: { abs($0.time - time) < abs($1.time - time) }) {
+            if abs(frame.time - time) < 1 || previewTask != nil {
+                return frame.image
+            }
+        }
+        if let previewTask {
+            _ = try? await previewTask.value
+        } else {
+            _ = try? await generatePreviewThumbnails()
+        }
+        if let frame = previewFrames.min(by: { abs($0.time - time) < abs($1.time - time) }) {
+            return frame.image
+        }
+        return await player.previewImage(at: time)
+    }
+
     open func seek(time: TimeInterval, autoPlay: Bool, completion: @escaping ((Bool) -> Void)) {
         if time.isInfinite || time.isNaN {
             completion(false)
+            return
         }
         if player.isReadyToPlay, player.seekable {
             player.seek(time: time) { [weak self] finished in
@@ -486,6 +537,8 @@ extension KSPlayerLayer: AVPictureInPictureControllerDelegate {
 
 extension KSPlayerLayer {
     open func prepareToPlay() {
+        cancelPreviewThumbnails()
+        previewFrames.removeAll()
         state = .preparing
         startTime = CACurrentMediaTime()
         bufferedCount = 0

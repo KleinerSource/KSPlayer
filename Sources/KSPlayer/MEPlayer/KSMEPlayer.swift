@@ -7,6 +7,7 @@
 
 import AVFoundation
 import AVKit
+import Foundation
 #if canImport(UIKit)
 import UIKit
 #else
@@ -16,6 +17,9 @@ import AppKit
 public class KSMEPlayer: NSObject {
     private var loopCount = 1
     private var playerItem: MEPlayerItem
+    private var sourceURL: URL
+    private let previewFramesLock = NSLock()
+    private var previewFrames = [KSPlayerPreviewFrame]()
     public let audioOutput: AudioOutput
     private var options: KSOptions
     private var bufferingCountDownTimer: Timer?
@@ -118,6 +122,7 @@ public class KSMEPlayer: NSObject {
         KSOptions.setAudioSession()
         audioOutput = KSOptions.audioPlayerType.init()
         playerItem = MEPlayerItem(url: url, options: options)
+        sourceURL = url
         if options.videoDisable {
             videoOutput = nil
         } else {
@@ -316,9 +321,11 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public func replace(url: URL, options: KSOptions) {
         KSLog("replaceUrl \(self)")
+        setPreviewFrames([])
         shutdown()
         playerItem.delegate = nil
         playerItem = MEPlayerItem(url: url, options: options)
+        sourceURL = url
         if options.videoDisable {
             videoOutput = nil
         } else if videoOutput == nil {
@@ -441,6 +448,52 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public func thumbnailImageAtCurrentTime() async -> CGImage? {
         videoOutput?.pixelBuffer?.cgImage()
+    }
+
+    public func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame] {
+        try await generatePreviewThumbnails(onUpdate: { _ in })
+    }
+
+    public func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame] {
+        try Task.checkCancellation()
+        let thumbnails = try await ThumbnailController().generateThumbnail(for: sourceURL, onUpdate: { [weak self] thumbnails in
+            let frames = self?.previewFrames(from: thumbnails) ?? []
+            self?.setPreviewFrames(frames)
+            onUpdate(frames)
+        })
+        let frames = previewFrames(from: thumbnails)
+        setPreviewFrames(frames)
+        onUpdate(frames)
+        return frames
+    }
+
+    private func previewFrames(from thumbnails: [FFThumbnail]) -> [KSPlayerPreviewFrame] {
+        thumbnails.compactMap { thumbnail in
+            thumbnail.cgImage.map { KSPlayerPreviewFrame(time: thumbnail.time, image: $0) }
+        }.sorted { $0.time < $1.time }
+    }
+
+    public func previewImage(at time: TimeInterval) async -> CGImage? {
+        guard time.isFinite, time >= 0 else { return nil }
+        if let frame = previewFramesSnapshot().min(by: { abs($0.time - time) < abs($1.time - time) }) {
+            return frame.image
+        }
+        return (try? await generatePreviewThumbnails())?.min {
+            abs($0.time - time) < abs($1.time - time)
+        }?.image
+    }
+
+    private func setPreviewFrames(_ frames: [KSPlayerPreviewFrame]) {
+        previewFramesLock.lock()
+        previewFrames = frames
+        previewFramesLock.unlock()
+    }
+
+    private func previewFramesSnapshot() -> [KSPlayerPreviewFrame] {
+        previewFramesLock.lock()
+        let frames = previewFrames
+        previewFramesLock.unlock()
+        return frames
     }
 
     public func enterBackground() {}
