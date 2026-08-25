@@ -148,6 +148,25 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         return max(Float(sampleRate / effectiveFrameSize), 48)
     }
 
+    /// Reads the optional FFmpeg display-matrix side data without trusting the
+    /// demuxer-provided pointer or length. Some MKV files expose a display
+    /// matrix entry with NULL/short data; passing that through to
+    /// `av_display_rotation_get` causes an EXC_BAD_ACCESS in the FFmpeg core.
+    static func displayMatrixRotation(data: UnsafeMutablePointer<UInt8>?, size: Int32) -> Int16 {
+        let matrixElementCount = 9
+        let matrixSize = Int32(MemoryLayout<Int32>.stride * matrixElementCount)
+        guard let data, size >= matrixSize else { return 0 }
+
+        let rawRotation = data.withMemoryRebound(to: Int32.self, capacity: matrixElementCount) {
+            -av_display_rotation_get($0)
+        }
+        guard rawRotation.isFinite else { return 0 }
+
+        let degrees = Int(rawRotation.rounded())
+        let normalized = ((degrees % 360) + 360) % 360
+        return Int16(normalized)
+    }
+
     init?(codecpar: AVCodecParameters) {
         self.codecpar = codecpar
         bitRate = codecpar.bit_rate
@@ -189,17 +208,14 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 for i in 0 ..< codecpar.nb_coded_side_data {
                     let sideData = sideDatas[Int(i)]
                     if sideData.type == AV_PKT_DATA_DOVI_CONF {
-                        dovi = sideData.data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
+                        let minimumSize = Int32(MemoryLayout<DOVIDecoderConfigurationRecord>.size)
+                        guard let data = sideData.data, sideData.size >= minimumSize else { continue }
+                        dovi = data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
                     } else if sideData.type == AV_PKT_DATA_DISPLAYMATRIX {
-                        let matrix = sideData.data.withMemoryRebound(to: Int32.self, capacity: 1) { $0 }
-                        let rawRotation = -av_display_rotation_get(matrix)
-                        if rawRotation.isFinite {
-                            let degrees = Int(rawRotation.rounded())
-                            let normalized = ((degrees % 360) + 360) % 360
-                            rotation = Int16(normalized)
-                        } else {
-                            rotation = 0
-                        }                        
+                        rotation = Self.displayMatrixRotation(
+                            data: sideData.data,
+                            size: sideData.size
+                        )
                     }
                 }
             }

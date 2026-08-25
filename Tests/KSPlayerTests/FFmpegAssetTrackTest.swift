@@ -99,4 +99,21 @@ final class FFmpegAssetTrackTest: XCTestCase {
         )
         XCTAssertEqual(rate, 48, accuracy: 0.001)
     }
+
+    /// MKV files can carry an empty display-matrix side-data entry. It must be
+    /// ignored instead of being passed to `av_display_rotation_get`, which
+    /// dereferences the missing matrix and crashes the app.
+    func testDisplayMatrixRotationSkipsMissingOrShortData() {
+        XCTAssertEqual(FFmpegAssetTrack.displayMatrixRotation(data: nil, size: 0), 0)
+
+        let data = UnsafeMutablePointer<UInt8>.allocate(capacity: MemoryLayout<Int32>.stride)
+        defer { data.deallocate() }
+        XCTAssertEqual(
+            FFmpegAssetTrack.displayMatrixRotation(
+                data: data,
+                size: Int32(MemoryLayout<Int32>.stride)
+            ),
+            0
+        )
+    }
 }
