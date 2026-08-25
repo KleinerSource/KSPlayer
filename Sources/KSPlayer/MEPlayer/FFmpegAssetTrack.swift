@@ -185,16 +185,13 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         } else if codecpar.codec_type == AVMEDIA_TYPE_VIDEO {
             audioDescriptor = nil
             mediaType = .video
-            if codecpar.nb_coded_side_data > 0, let sideDatas = codecpar.coded_side_data {
-                for i in 0 ..< codecpar.nb_coded_side_data {
-                    let sideData = sideDatas[Int(i)]
-                    if sideData.type == AV_PKT_DATA_DOVI_CONF {
-                        let minimumSize = MemoryLayout<DOVIDecoderConfigurationRecord>.size
-                        guard let data = sideData.data, Int(sideData.size) >= minimumSize else { continue }
-                        dovi = data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
-                    }
-                }
-            }
+            // Do not dereference codecpar.coded_side_data here. Some Matroska
+            // files expose a non-null but invalid DOVI payload pointer (for
+            // example, 0x7c8). A raw FFmpeg pointer cannot be made safe by
+            // checking its size in Swift, and this optional metadata is not
+            // required to create or decode the video track. Leave `dovi` nil
+            // for the FFmpeg player rather than terminating the app while
+            // opening an otherwise playable file.
             let sar = codecpar.sample_aspect_ratio.size
             var extradataSize = Int32(0)
             var extradata = codecpar.extradata
