@@ -111,7 +111,7 @@ final class FFmpegAssetTrackTest: XCTestCase {
         XCTAssertEqual(
             FFmpegAssetTrack.displayMatrixRotation(
                 data: data,
-                size: Int32(MemoryLayout<Int32>.stride)
+                size: MemoryLayout<Int32>.stride
             ),
             0
         )

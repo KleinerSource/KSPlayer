@@ -152,9 +152,9 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
     /// demuxer-provided pointer or length. Some MKV files expose a display
     /// matrix entry with NULL/short data; passing that through to
     /// `av_display_rotation_get` causes an EXC_BAD_ACCESS in the FFmpeg core.
-    static func displayMatrixRotation(data: UnsafeMutablePointer<UInt8>?, size: Int32) -> Int16 {
+    static func displayMatrixRotation(data: UnsafeMutablePointer<UInt8>?, size: Int) -> Int16 {
         let matrixElementCount = 9
-        let matrixSize = Int32(MemoryLayout<Int32>.stride * matrixElementCount)
+        let matrixSize = MemoryLayout<Int32>.stride * matrixElementCount
         guard let data, size >= matrixSize else { return 0 }
 
         let rawRotation = data.withMemoryRebound(to: Int32.self, capacity: matrixElementCount) {
@@ -208,13 +208,13 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 for i in 0 ..< codecpar.nb_coded_side_data {
                     let sideData = sideDatas[Int(i)]
                     if sideData.type == AV_PKT_DATA_DOVI_CONF {
-                        let minimumSize = Int32(MemoryLayout<DOVIDecoderConfigurationRecord>.size)
-                        guard let data = sideData.data, sideData.size >= minimumSize else { continue }
+                        let minimumSize = MemoryLayout<DOVIDecoderConfigurationRecord>.size
+                        guard let data = sideData.data, Int(sideData.size) >= minimumSize else { continue }
                         dovi = data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
                     } else if sideData.type == AV_PKT_DATA_DISPLAYMATRIX {
                         rotation = Self.displayMatrixRotation(
                             data: sideData.data,
-                            size: sideData.size
+                            size: Int(sideData.size)
                         )
                     }
                 }
