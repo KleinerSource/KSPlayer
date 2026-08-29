@@ -83,6 +83,7 @@ public class KSAVPlayer {
     private var cacheLoader: KSPlayerMediaCacheResourceLoader?
     private var mediaCachePrepareTask: Task<Void, Never>?
     private var shouldSeekTo = TimeInterval(0)
+    private var seekCompletionGeneration = 0
     private var playerLooper: AVPlayerLooper?
     private var statusObservation: NSKeyValueObservation?
     private var loadedTimeRangesObservation: NSKeyValueObservation?
@@ -291,10 +292,13 @@ extension KSAVPlayer {
 
     private func playOrPause() {
         if playbackState == .playing {
-            if loadState == .playable {
-                player.play()
-                player.rate = playbackRate
-            }
+            // 播放器已配置 automaticallyWaitsToMinimizeStalling = false，
+            // 缓冲不足时的停顿与恢复交给 AVFoundation 原生处理。此前用
+            // loadState == .playable 门控 play：HLS 远距离定位后
+            // loadedTimeRanges 迟迟不覆盖 currentTime 时 loadState 永远
+            // 回不到 playable，播放器便停在“持续下载但不再解码”的僵死。
+            player.play()
+            player.rate = playbackRate
         } else {
             player.pause()
         }
@@ -477,11 +481,32 @@ extension KSAVPlayer: MediaPlayerProtocol {
             self?.bufferingProgress = 0
         }
         let tolerance: CMTime = options.isAccurateSeek ? .zero : .positiveInfinity
+        // AVPlayer 在目标分片长时间无法加载时可能不回调 seek completion，
+        // shouldSeekTo 将永久卡住（播放位置上报冻结、上层恢复逻辑失效）。
+        // generation 保证 completion 至多投递一次；超时后清状态并按
+        // isSeekedAutoPlay 恢复播放，交由 AVFoundation 原生停顿/恢复续播。
+        seekCompletionGeneration += 1
+        let generation = seekCompletionGeneration
         player.seek(to: CMTime(seconds: time), toleranceBefore: tolerance, toleranceAfter: tolerance) {
             [weak self] finished in
             guard let self else { return }
+            let shouldDeliver = self.seekCompletionGeneration == generation
+            self.seekCompletionGeneration += 1
             self.shouldSeekTo = 0
-            completion(finished)
+            if shouldDeliver {
+                completion(finished)
+            }
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self, self.isReadyToPlay, self.seekCompletionGeneration == generation else { return }
+            KSLog("KSAVPlayer seek completion timeout, fallback resume")
+            self.seekCompletionGeneration += 1
+            self.shouldSeekTo = 0
+            if self.options.isSeekedAutoPlay, self.playbackState == .seeking {
+                self.playbackState = .playing
+            }
+            completion(false)
         }
     }
 
