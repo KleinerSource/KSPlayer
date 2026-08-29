@@ -132,34 +132,7 @@ open class KSPlayerLayer: NSObject {
 
     public private(set) var url: URL {
         didSet {
-            let firstPlayerType: MediaPlayerProtocol.Type
-            if isWirelessRouteActive {
-                // airplay的话，默认使用KSAVPlayer
-                firstPlayerType = KSAVPlayer.self
-            } else if options.display != .plane {
-                // AR模式只能用KSMEPlayer
-                // swiftlint:disable force_cast
-                firstPlayerType = NSClassFromString("KSPlayer.KSMEPlayer") as! MediaPlayerProtocol.Type
-                // swiftlint:enable force_cast
-            } else {
-                firstPlayerType = KSOptions.firstPlayerType
-            }
-            if type(of: player) == firstPlayerType {
-                if url == oldValue {
-                    if isAutoPlay {
-                        play()
-                    }
-                } else {
-                    stop()
-                    player.replace(url: url, options: options)
-                    if isAutoPlay {
-                        prepareToPlay()
-                    }
-                }
-            } else {
-                stop()
-                player = firstPlayerType.init(url: url, options: options)
-            }
+            updatePlayer(from: oldValue)
         }
     }
 
@@ -264,19 +237,20 @@ open class KSPlayerLayer: NSObject {
     }
 
     public func set(url: URL, options: KSOptions) {
-        self.options = options
-        runOnMainThread {
-            self.url = url
+        runOnMainThread { [weak self] in
+            guard let self else { return }
+            self.options = options
+            self.update(url: url, forceReplace: true)
         }
     }
 
     public func set(urls: [URL], options: KSOptions) {
-        self.options = options
-        self.urls.removeAll()
-        self.urls.append(contentsOf: urls)
-        if let first = urls.first {
-            runOnMainThread {
-                self.url = first
+        runOnMainThread { [weak self] in
+            guard let self else { return }
+            self.options = options
+            self.urls = urls
+            if let first = urls.first {
+                self.update(url: first, forceReplace: true)
             }
         }
     }
@@ -493,8 +467,13 @@ extension KSPlayerLayer: MediaPlayerDelegate {
     }
 
     public func finish(player: some MediaPlayerProtocol, error: Error?) {
+        guard (player as AnyObject) === (self.player as AnyObject) else {
+            return
+        }
         if let error {
             if type(of: player) != KSOptions.secondPlayerType, let secondPlayerType = KSOptions.secondPlayerType {
+                player.delegate = nil
+                player.shutdown()
                 self.player = secondPlayerType.init(url: url, options: options)
                 return
             }
@@ -536,6 +515,52 @@ extension KSPlayerLayer: AVPictureInPictureControllerDelegate {
 // MARK: - private functions
 
 extension KSPlayerLayer {
+    private func preferredPlayerType() -> MediaPlayerProtocol.Type {
+        if isWirelessRouteActive {
+            // airplay的话，默认使用KSAVPlayer
+            return KSAVPlayer.self
+        } else if options.display != .plane {
+            // AR模式只能用KSMEPlayer
+            // swiftlint:disable force_cast
+            return NSClassFromString("KSPlayer.KSMEPlayer") as! MediaPlayerProtocol.Type
+            // swiftlint:enable force_cast
+        } else {
+            return KSOptions.firstPlayerType
+        }
+    }
+
+    private func update(url: URL, forceReplace: Bool) {
+        if url == self.url {
+            if forceReplace {
+                updatePlayer(from: self.url, forceReplace: true)
+            } else if isAutoPlay {
+                play()
+            }
+        } else {
+            self.url = url
+        }
+    }
+
+    private func updatePlayer(from oldURL: URL, forceReplace: Bool = false) {
+        let firstPlayerType = preferredPlayerType()
+        if type(of: player) == firstPlayerType {
+            if url == oldURL, !forceReplace {
+                if isAutoPlay {
+                    play()
+                }
+                return
+            }
+            stop()
+            player.replace(url: url, options: options)
+            if isAutoPlay {
+                prepareToPlay()
+            }
+        } else {
+            stop()
+            player = firstPlayerType.init(url: url, options: options)
+        }
+    }
+
     open func prepareToPlay() {
         cancelPreviewThumbnails()
         previewFrames.removeAll()

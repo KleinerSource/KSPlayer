@@ -65,7 +65,9 @@ extension KSVideoPlayer: UIViewRepresentable {
 
     @MainActor
     private func updateView(_: UIView, context: Context) {
-        if context.coordinator.playerLayer?.url != url {
+        let layer = context.coordinator.playerLayer
+        let optionsChanged = layer.map { $0.options !== options } ?? true
+        if layer?.url != url || optionsChanged {
             _ = context.coordinator.makeView(url: url, options: options)
         }
     }
@@ -145,7 +147,7 @@ extension KSVideoPlayer: UIViewRepresentable {
                 }
             }
             if let playerLayer {
-                if playerLayer.url == url {
+                if playerLayer.url == url, playerLayer.options === options {
                     return playerLayer.player.view ?? UIView()
                 }
                 playerLayer.delegate = nil
