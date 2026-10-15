@@ -52,6 +52,21 @@ open class KSOptions {
     public var outputURL: URL?
     public var avOptions = [String: Any]()
     public var formatContextOptions = [String: Any]()
+    /// Interrupt deadlines for network inputs; nil preserves the file/HLS policy.
+    public var networkConnectTimeout: TimeInterval?
+    public var networkReadTimeout: TimeInterval?
+    public static func isStreamingURL(_ url: URL) -> Bool {
+        ["srt", "rtsp", "rtsps", "rtmp", "rtmps"].contains(url.scheme?.lowercased() ?? "")
+    }
+
+    func configureStreaming(url: URL) {
+        guard Self.isStreamingURL(url) else { return }
+        networkConnectTimeout = networkConnectTimeout ?? 5
+        networkReadTimeout = networkReadTimeout ?? 10
+        if ["rtsp", "rtsps"].contains(url.scheme?.lowercased() ?? ""), formatContextOptions["rtsp_transport"] == nil {
+            formatContextOptions["rtsp_transport"] = "tcp"
+        }
+    }
     public var decoderOptions = [String: Any]()
     public var probesize: Int64?
     public var maxAnalyzeDuration: Int64?
@@ -674,7 +689,14 @@ public func KSLog(_ error: @autoclosure () -> Error, file: String = #file, funct
 public func KSLog(level: LogLevel = .warning, _ message: @autoclosure () -> CustomStringConvertible, file: String = #file, function: String = #function, line: UInt = #line) {
     if level.rawValue <= KSOptions.logLevel.rawValue {
         let fileName = (file as NSString).lastPathComponent
-        KSOptions.logger.log(level: level, message: message(), file: fileName, function: function, line: line)
+        let log = message().description
+            .replacingOccurrences(of: #"(?i)\b(?:https?|rtmps?|rtsps?|srt)://[^\s\"'<>]+"#,
+                                  with: "[stream URL]", options: .regularExpression)
+            .replacingOccurrences(of: #"(?im)(authorization|cookie|passphrase|password|streamid)\s*[:=][^\r\n]*"#,
+                                  with: "$1=[redacted]", options: .regularExpression)
+            .replacingOccurrences(of: #"(?im)(sending (?:play|publish) command for |proto = |accept streamid \[|app field don't match up:)[^\r\n]*"#,
+                                  with: "$1[redacted]", options: .regularExpression)
+        KSOptions.logger.log(level: level, message: log, file: fileName, function: function, line: line)
     }
 }
 

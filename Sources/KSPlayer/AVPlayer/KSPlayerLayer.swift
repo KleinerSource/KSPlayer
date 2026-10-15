@@ -175,7 +175,7 @@ open class KSPlayerLayer: NSObject {
         self.options = options
         self.delegate = delegate
         let firstPlayerType: MediaPlayerProtocol.Type
-        if options.display != .plane {
+        if options.display != .plane || KSOptions.isStreamingURL(url) {
             // AR模式只能用KSMEPlayer
             // swiftlint:disable force_cast
             firstPlayerType = NSClassFromString("KSPlayer.KSMEPlayer") as! MediaPlayerProtocol.Type
@@ -516,10 +516,10 @@ extension KSPlayerLayer: AVPictureInPictureControllerDelegate {
 
 extension KSPlayerLayer {
     private func preferredPlayerType() -> MediaPlayerProtocol.Type {
-        if isWirelessRouteActive {
+        if isWirelessRouteActive, !KSOptions.isStreamingURL(url) {
             // airplay的话，默认使用KSAVPlayer
             return KSAVPlayer.self
-        } else if options.display != .plane {
+        } else if options.display != .plane || KSOptions.isStreamingURL(url) {
             // AR模式只能用KSMEPlayer
             // swiftlint:disable force_cast
             return NSClassFromString("KSPlayer.KSMEPlayer") as! MediaPlayerProtocol.Type

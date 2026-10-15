@@ -37,14 +37,15 @@ public protocol OutputRenderSourceDelegate: AnyObject {
 
 protocol CodecCapacityDelegate: AnyObject {
     func codecDidFinished(track: some CapacityProtocol)
+    func codecDidFailed(error: Error)
 }
 
 protocol MEPlayerDelegate: AnyObject {
-    func sourceDidChange(loadingState: LoadingState)
-    func sourceDidOpened()
-    func sourceDidFailed(error: NSError?)
-    func sourceDidFinished()
-    func sourceDidChange(oldBitRate: Int64, newBitrate: Int64)
+    func sourceDidChange(source: MEPlayerItem, loadingState: LoadingState)
+    func sourceDidOpened(source: MEPlayerItem)
+    func sourceDidFailed(source: MEPlayerItem, error: NSError?)
+    func sourceDidFinished(source: MEPlayerItem)
+    func sourceDidChange(source: MEPlayerItem, oldBitRate: Int64, newBitrate: Int64)
 }
 
 // MARK: protocol

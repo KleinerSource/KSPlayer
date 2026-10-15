@@ -164,6 +164,9 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                     self.doDecode(packet: packet)
                 } else {
                     self.state = .failed
+                    if self.mediaType == .video || self.mediaType == .audio {
+                        self.delegate?.codecDidFailed(error: error)
+                    }
                 }
             }
         }
@@ -304,6 +307,8 @@ extension SyncPlayerItemTrack {
                 return SubtitleDecode(assetTrack: assetTrack, options: options)
             } else {
                 if mediaType == .video, options.asynchronousDecompression, options.hardwareDecode,
+                   assetTrack.dovi == nil,
+                   !(assetTrack.codecType == kCMVideoCodecType_H264 && options.formatName != "hls"),
                    let session = DecompressionSession(assetTrack: assetTrack, options: options)
                 {
                     assetTrack.actualDecoder = "VideoToolbox"
