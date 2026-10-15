@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
     s.name             = 'KSPlayer'
-    s.version          = '1.1.0'
+    s.version          = '1.2.0'
     s.summary          = 'Video Player Using Swift, based on AVPlayer,FFmpeg'
 
     s.description      = <<-DESC
@@ -12,11 +12,12 @@ Pod::Spec.new do |s|
     s.license          = { :type => 'GPL-3.0', :file => 'LICENSE' }
     s.source           = { :git => 'https://github.com/kingslay/KSPlayer.git', :tag => s.version.to_s }
 
-    s.ios.deployment_target = '13.4'
+    s.ios.deployment_target = '16.0'
     s.osx.deployment_target = '10.15'
     # s.watchos.deployment_target = '2.0'
     s.tvos.deployment_target = '13.0'
     s.static_framework = true
+    s.swift_version = '5.9'
     s.subspec 'Subtitle' do |ss|
         ss.source_files = 'Sources/KSPlayer/Subtitle/*.{swift}'
         ss.frameworks = 'Foundation'
@@ -41,7 +42,7 @@ Pod::Spec.new do |s|
     s.subspec 'MEPlayer' do |ss|
         ss.source_files = 'Sources/KSPlayer/MEPlayer/**/*.{swift}'
         ss.frameworks  = 'AudioToolbox', 'VideoToolbox'
-        ss.dependency 'FFmpegKit'
+        ss.dependency 'FFmpegKit', '8.1.0'
         ss.dependency 'KSPlayer/AVPlayer'
         ss.dependency 'KSPlayer/Metal'
         ss.dependency 'KSPlayer/Subtitle'

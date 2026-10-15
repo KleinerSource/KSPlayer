@@ -950,7 +950,7 @@ extension AbstractAVIOContext {
             let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque!).takeUnretainedValue()
             let ret = value.read(buffer: buffer, size: size)
             return Int32(ret)
-        } _: { opaque, buffer, size -> Int32 in
+        } _: { (opaque: UnsafeMutableRawPointer?, buffer: UnsafePointer<UInt8>?, size: Int32) -> Int32 in
             let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque!).takeUnretainedValue()
             let ret = value.write(buffer: buffer, size: size)
             return Int32(ret)

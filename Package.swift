@@ -5,8 +5,7 @@ import PackageDescription
 let package = Package(
     name: "KSPlayer",
     defaultLocalization: "en",
-    platforms: [.macOS(.v10_15), .macCatalyst(.v14), .iOS(.v13), .tvOS(.v13),
-                .visionOS(.v1)],
+    platforms: [.iOS(.v16)],
     products: [
         // Products define the executables and libraries produced by a package, and make them visible to other packages.
         .library(
@@ -43,5 +42,5 @@ let package = Package(
 )
 
 package.dependencies += [
-    .package(url: "https://github.com/kingslay/FFmpegKit.git", from: "6.1.4"),
+    .package(path: "../FFmpegKit"),
 ]
