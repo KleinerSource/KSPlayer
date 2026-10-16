@@ -10,6 +10,7 @@ import FFmpegKit
 import Libavcodec
 import Libavfilter
 import Libavformat
+import Libavutil
 
 public final class MEPlayerItem: Sendable {
     private let url: URL
@@ -201,7 +202,20 @@ public final class MEPlayerItem: Sendable {
 // MARK: private functions
 
 extension MEPlayerItem {
+    static func isFFmpegRuntimeCompatible(formatVersion: UInt32, codecVersion: UInt32, utilVersion: UInt32) -> Bool {
+        formatVersion >> 16 == UInt32(LIBAVFORMAT_VERSION_MAJOR)
+            && codecVersion >> 16 == UInt32(LIBAVCODEC_VERSION_MAJOR)
+            && utilVersion >> 16 == UInt32(LIBAVUTIL_VERSION_MAJOR)
+    }
+
     private func openThread() {
+        guard Self.isFFmpegRuntimeCompatible(formatVersion: avformat_version(),
+                                             codecVersion: avcodec_version(),
+                                             utilVersion: avutil_version())
+        else {
+            error = NSError(description: "FFmpeg ABI mismatch: rebuild with the matching FFmpegKit libraries.")
+            return
+        }
         releaseCustomIO()
         avformat_close_input(&self.formatCtx)
         formatCtx = avformat_alloc_context()
