@@ -9,36 +9,37 @@ class KSPlayerLayerTest: XCTestCase {
         KSOptions.isAccurateSeek = true
     }
 
+    @MainActor
     func testPlayerLayer() async throws {
         let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
-        set(path: url.path)
+        await set(path: url.path)
     }
 
-    func set(path: String) {
+    @MainActor
+    private func set(path: String) async {
         let options = KSOptions()
         let playerLayer = KSPlayerLayer(url: URL(fileURLWithPath: path), isAutoPlay: false, options: options)
         playerLayer.delegate = self
         XCTAssertEqual(playerLayer.state, .preparing)
-        readyToPlayExpectation = expectation(description: "openVideo")
-        waitForExpectations(timeout: 2) { _ in
-            XCTAssert(playerLayer.player.isReadyToPlay == true)
-            XCTAssertEqual(playerLayer.state, .readyToPlay)
-            playerLayer.play()
-            playerLayer.pause()
-            XCTAssertEqual(playerLayer.state, .paused)
-            let seekExpectation = self.expectation(description: "seek")
-            playerLayer.seek(time: 2, autoPlay: true) { _ in
-                seekExpectation.fulfill()
-            }
-            XCTAssertEqual(playerLayer.state, .buffering)
-            self.waitForExpectations(timeout: 1000) { _ in
-                playerLayer.finish(player: playerLayer.player, error: nil)
-                XCTAssertEqual(playerLayer.state, .playedToTheEnd)
-                playerLayer.stop()
-                XCTAssertEqual(playerLayer.state, .initialized)
-            }
+        let readyExpectation = expectation(description: "openVideo")
+        readyToPlayExpectation = readyExpectation
+        await fulfillment(of: [readyExpectation], timeout: 2)
+        XCTAssert(playerLayer.player.isReadyToPlay == true)
+        XCTAssertEqual(playerLayer.state, .readyToPlay)
+        playerLayer.play()
+        playerLayer.pause()
+        XCTAssertEqual(playerLayer.state, .paused)
+        let seekExpectation = expectation(description: "seek")
+        playerLayer.seek(time: 2, autoPlay: true) { _ in
+            seekExpectation.fulfill()
         }
+        XCTAssertEqual(playerLayer.state, .buffering)
+        await fulfillment(of: [seekExpectation], timeout: 1000)
+        playerLayer.finish(player: playerLayer.player, error: nil)
+        XCTAssertEqual(playerLayer.state, .playedToTheEnd)
+        playerLayer.stop()
+        XCTAssertEqual(playerLayer.state, .initialized)
     }
 }
 
