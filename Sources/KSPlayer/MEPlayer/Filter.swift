@@ -18,12 +18,16 @@ class MEFilter {
     private let isAudio: Bool
     private var params = AVBufferSrcParameters()
     private let nominalFrameRate: Float
+    private let options: KSOptions
     deinit {
         graph?.pointee.opaque = nil
         avfilter_graph_free(&graph)
+        av_buffer_unref(&params.hw_frames_ctx)
+        av_channel_layout_uninit(&params.ch_layout)
     }
 
     public init(timebase: Timebase, isAudio: Bool, nominalFrameRate: Float, options: KSOptions) {
+        self.options = options
         graph = avfilter_graph_alloc()
         graph?.pointee.opaque = Unmanaged.passUnretained(options).toOpaque()
         self.timebase = timebase
@@ -32,12 +36,14 @@ class MEFilter {
     }
 
     private func setup(filters: String) -> Bool {
-        var inputs = avfilter_inout_alloc()
-        var outputs = avfilter_inout_alloc()
-        var ret = avfilter_graph_parse2(graph, filters, &inputs, &outputs)
-        guard ret >= 0, let graph, let inputs, let outputs else {
+        var inputs: UnsafeMutablePointer<AVFilterInOut>?
+        var outputs: UnsafeMutablePointer<AVFilterInOut>?
+        defer {
             avfilter_inout_free(&inputs)
             avfilter_inout_free(&outputs)
+        }
+        var ret = avfilter_graph_parse2(graph, filters, &inputs, &outputs)
+        guard ret >= 0, let graph, let inputs, let outputs else {
             return false
         }
         let bufferSink = avfilter_get_by_name(isAudio ? "abuffersink" : "buffersink")
@@ -55,7 +61,7 @@ class MEFilter {
         guard ret >= 0 else { return false }
         if let ctx = params.hw_frames_ctx {
             let framesCtxData = UnsafeMutableRawPointer(ctx.pointee.data).bindMemory(to: AVHWFramesContext.self, capacity: 1)
-            inputs.pointee.filter_ctx.pointee.hw_device_ctx = framesCtxData.pointee.device_ref
+            inputs.pointee.filter_ctx.pointee.hw_device_ctx = av_buffer_ref(framesCtxData.pointee.device_ref)
 //                    outputs.pointee.filter_ctx.pointee.hw_device_ctx = framesCtxData.pointee.device_ref
 //                    bufferSrcContext?.pointee.hw_device_ctx = framesCtxData.pointee.device_ref
 //                    bufferSinkContext?.pointee.hw_device_ctx = framesCtxData.pointee.device_ref
@@ -123,15 +129,26 @@ class MEFilter {
         params.height = inputFrame.pointee.height
         params.sample_aspect_ratio = inputFrame.pointee.sample_aspect_ratio
         params.frame_rate = AVRational(num: 1, den: Int32(nominalFrameRate))
-        if let ctx = inputFrame.pointee.hw_frames_ctx {
-            params.hw_frames_ctx = av_buffer_ref(ctx)
-        }
+        // Borrow while comparing; own one reference only when rebuilding.
+        params.hw_frames_ctx = inputFrame.pointee.hw_frames_ctx
         params.sample_rate = inputFrame.pointee.sample_rate
         params.ch_layout = inputFrame.pointee.ch_layout
         if self.params != params || self.filters != filters {
+            graph?.pointee.opaque = nil
+            avfilter_graph_free(&graph)
+            graph = avfilter_graph_alloc()
+            graph?.pointee.opaque = Unmanaged.passUnretained(self.options).toOpaque()
+            bufferSrcContext = nil
+            bufferSinkContext = nil
+            av_buffer_unref(&self.params.hw_frames_ctx)
+            av_channel_layout_uninit(&self.params.ch_layout)
             self.params = params
+            self.params.hw_frames_ctx = params.hw_frames_ctx.flatMap { av_buffer_ref($0) }
+            self.params.ch_layout = AVChannelLayout()
+            av_channel_layout_copy(&self.params.ch_layout, &params.ch_layout)
             self.filters = filters
             if !setup(filters: filters) {
+                self.filters = nil
                 completionHandler(inputFrame)
                 return
             }

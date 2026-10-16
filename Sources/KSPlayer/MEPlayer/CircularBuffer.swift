@@ -18,6 +18,12 @@ public class CircularBuffer<Item: ObjectQueueItem> {
     private let expanding: Bool
     private let sorted: Bool
     private var destroyed = false
+    private var _byteSize = 0
+    public var byteSize: Int {
+        condition.lock()
+        defer { condition.unlock() }
+        return _byteSize
+    }
     @inline(__always)
     private var _count: Int { Int(tailIndex &- headIndex) }
     @inline(__always)
@@ -50,6 +56,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             assertionFailure("value is not nil of headIndex: \(headIndex),tailIndex: \(tailIndex), bufferCount: \(_buffer.count), mask: \(mask)")
         }
         _buffer[Int(tailIndex & mask)] = value
+        _byteSize += max(0, Int(value.size))
         if sorted {
             // 不用sort进行排序，这个比较高效
             var index = tailIndex
@@ -107,6 +114,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         } else {
             headIndex &+= 1
             _buffer[index] = nil
+            _byteSize -= max(0, Int(item.size))
             if _count == maxCount >> 1 {
                 condition.signal()
             }
@@ -137,6 +145,9 @@ public class CircularBuffer<Item: ObjectQueueItem> {
                     // subtitles the 255-slot queue fills within 10-15 minutes and
                     // the app traps on KSPlayer_MEPlayerItem_read.
                     while headIndex <= i {
+                        if let removed = _buffer[Int(headIndex & mask)] {
+                            _byteSize -= max(0, Int(removed.size))
+                        }
                         _buffer[Int(headIndex & mask)] = nil
                         headIndex &+= 1
                     }
@@ -155,6 +166,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         defer { condition.unlock() }
         headIndex = 0
         tailIndex = 0
+        _byteSize = 0
         _buffer.removeAll(keepingCapacity: !destroyed)
         _buffer.append(contentsOf: ContiguousArray<Item?>(repeating: nil, count: destroyed ? 1 : maxCount))
         condition.broadcast()

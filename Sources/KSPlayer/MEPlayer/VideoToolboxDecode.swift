@@ -78,9 +78,9 @@ class VideoToolboxDecode: DecodeProtocol {
                 completionHandler(.success(frame))
             }
             if status == noErr {
-                if !flags.contains(._EnableAsynchronousDecompression) {
-                    VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
-                }
+                // The output queue can block its callback while full. Wait on
+                // the decoder thread so pending VT work cannot bypass that bound.
+                VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
             } else if status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr || status == kVTVideoDecoderBadDataErr {
                 if packet.isKeyFrame {
                     throw NSError(errorCode: .codecVideoReceiveFrame, avErrorCode: status)

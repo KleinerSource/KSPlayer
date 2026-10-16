@@ -384,7 +384,7 @@ extension AVRational {
 
 extension AVBufferSrcParameters: Equatable {
     public static func == (lhs: AVBufferSrcParameters, rhs: AVBufferSrcParameters) -> Bool {
-        lhs.format == rhs.format && lhs.width == rhs.width && lhs.height == rhs.height && lhs.sample_aspect_ratio == rhs.sample_aspect_ratio && lhs.sample_rate == rhs.sample_rate && lhs.ch_layout == rhs.ch_layout
+        lhs.format == rhs.format && lhs.width == rhs.width && lhs.height == rhs.height && lhs.sample_aspect_ratio == rhs.sample_aspect_ratio && lhs.sample_rate == rhs.sample_rate && lhs.ch_layout == rhs.ch_layout && lhs.hw_frames_ctx?.pointee.data == rhs.hw_frames_ctx?.pointee.data
     }
 
     var arg: String {

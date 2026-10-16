@@ -35,6 +35,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
 
     var isEndOfFile: Bool = false
     var packetCount: Int { 0 }
+    var packetBufferSize: Int { 0 }
     let description: String
     weak var delegate: CodecCapacityDelegate?
     let mediaType: AVFoundation.AVMediaType
@@ -186,6 +187,7 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     private var loopPacketQueue: CircularBuffer<Packet>?
     var packetQueue = CircularBuffer<Packet>()
     override var packetCount: Int { packetQueue.count }
+    override var packetBufferSize: Int { packetQueue.byteSize + (loopPacketQueue?.byteSize ?? 0) }
     override var isLoopModel: Bool {
         didSet {
             if isLoopModel {

@@ -55,6 +55,7 @@ public final class MEPlayerItem: Sendable {
     private var isFirst = true
     private var isSeek = false
     private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
+    var packetBufferSize: Int { allPlayerItemTracks.reduce(0) { $0 + $1.packetBufferSize } }
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
     private var videoTrack: SyncPlayerItemTrack<VideoVTBFrame>?
@@ -595,6 +596,14 @@ extension MEPlayerItem {
                 videoClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
                 state = .reading
             } else if state == .reading {
+                // Check on the reader itself: a busy main run loop must not let
+                // high-bitrate 4K input outgrow the time-based capacity timer.
+                if packetBufferSize >= max(1, options.maxBufferSize) {
+                    condition.lock()
+                    _ = condition.wait(until: Date(timeIntervalSinceNow: 0.02))
+                    condition.unlock()
+                    continue
+                }
                 autoreleasepool {
                     _ = reading()
                 }

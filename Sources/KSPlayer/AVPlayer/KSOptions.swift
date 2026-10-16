@@ -20,6 +20,9 @@ open class KSOptions {
     public var preferredForwardBufferDuration = KSOptions.preferredForwardBufferDuration
     /// 最大缓存视频时间
     public var maxBufferDuration = KSOptions.maxBufferDuration
+    /// Compressed audio/video packet budget, independent of bitrate and duration.
+    /// One demuxed packet may exceed this limit; decoded frames have separate queues.
+    public var maxBufferSize = 64 * 1024 * 1024
     /// 是否开启秒开
     public var isSecondOpen = KSOptions.isSecondOpen
     /// 开启精确seek
@@ -191,6 +194,7 @@ open class KSOptions {
         let isEndOfFile = capacitys.allSatisfy(\.isEndOfFile)
         let loadedTime = capacitys.map(\.loadedTime).min() ?? 0
         let progress = preferredForwardBufferDuration == 0 ? 100 : loadedTime * 100.0 / preferredForwardBufferDuration
+        let isPacketBufferFull = capacitys.reduce(0) { $0 + $1.packetBufferSize } >= max(1, maxBufferSize)
         let isPlayable = capacitys.allSatisfy { capacity in
             if capacity.isEndOfFile && capacity.packetCount == 0 {
                 return true
@@ -198,6 +202,9 @@ open class KSOptions {
             guard capacity.frameCount >= 2 else {
                 return false
             }
+            // At the byte budget, waiting for more seconds would deadlock
+            // high-bitrate playback. Each track still needs renderable frames.
+            if isPacketBufferFull { return true }
             if capacity.isEndOfFile {
                 return true
             }
