@@ -40,8 +40,9 @@ class KSPlayerLayerTest: XCTestCase {
             XCTAssertTrue(finished)
             seekExpectation.fulfill()
         }
-        XCTAssertEqual(playerLayer.state, .buffering)
+        XCTAssertEqual(playerLayer.state, .paused)
         await fulfillment(of: [seekExpectation], timeout: 30)
+        XCTAssertTrue(playerLayer.player.isPlaying)
         playerLayer.finish(player: playerLayer.player, error: nil)
         XCTAssertEqual(playerLayer.state, .playedToTheEnd)
         playerLayer.stop()
