@@ -132,9 +132,9 @@ public class KSMEPlayer: NSObject {
             if playbackState != oldValue {
                 playOrPause()
                 if playbackState == .finished {
-                    runOnMainThread { [weak self] in
+                    Task { @MainActor [weak self] in
                         guard let self else { return }
-                        delegate?.finish(player: self, error: nil)
+                        self.delegate?.finish(player: self, error: nil)
                     }
                 }
             }
@@ -234,7 +234,7 @@ extension KSMEPlayer: MEPlayerDelegate {
             savedRecoveryTime = nil
             isReadyToPlay = true
             tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }.forEach {
-                $0.delay = subtitleDelay
+                $0.delay = self.subtitleDelay
             }
             options.readyTime = CACurrentMediaTime()
             let vidoeTracks = tracks(mediaType: .video)

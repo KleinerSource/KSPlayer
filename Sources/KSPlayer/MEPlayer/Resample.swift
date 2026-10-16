@@ -41,7 +41,7 @@ class VideoSwscale: FrameTransfer {
             outFrame = nil
         } else {
             let dstFormat = format.bestPixelFormat
-            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, width, height, dstFormat, SWS_BICUBIC.rawValue, nil, nil, nil)
+            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, width, height, dstFormat, Int32(SWS_BICUBIC.rawValue), nil, nil, nil)
             outFrame = av_frame_alloc()
             outFrame?.pointee.format = dstFormat.rawValue
             outFrame?.pointee.width = width
@@ -112,7 +112,7 @@ class VideoSwresample: FrameChange {
             pixelFormatType = dstFormat.osType()!
 //            imgConvertCtx = sws_getContext(width, height, self.format, width, height, dstFormat, SWS_FAST_BILINEAR, nil, nil, nil)
             // AV_PIX_FMT_VIDEOTOOLBOX格式是无法进行swscale的
-            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, dstWidth, dstHeight, dstFormat, SWS_FAST_BILINEAR.rawValue, nil, nil, nil)
+            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, dstWidth, dstHeight, dstFormat, Int32(SWS_FAST_BILINEAR.rawValue), nil, nil, nil)
         }
         pool = CVPixelBufferPool.create(width: dstWidth, height: dstHeight, bytesPerRowAlignment: linesize, pixelFormatType: pixelFormatType)
     }
