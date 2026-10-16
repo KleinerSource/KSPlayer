@@ -80,7 +80,7 @@ public final class MEPlayerItem: Sendable {
     private var startTime = CMTime.zero
     public private(set) var duration: TimeInterval = 0
     public var isLive: Bool { duration <= 0 || !duration.isFinite }
-    var restoredTrackIDs: [AVMediaType: Set<Int32>] = [:]
+    var restoredTrackIDs: [AVFoundation.AVMediaType: Set<Int32>] = [:]
     public private(set) var fileSize: Double = 0
     public private(set) var naturalSize = CGSize.zero
     private var error: NSError? {

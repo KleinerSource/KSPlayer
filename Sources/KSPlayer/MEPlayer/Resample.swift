@@ -23,7 +23,7 @@ protocol FrameChange {
 }
 
 class VideoSwscale: FrameTransfer {
-    private var imgConvertCtx: OpaquePointer?
+    private var imgConvertCtx: UnsafeMutablePointer<SwsContext>?
     private var format: AVPixelFormat = AV_PIX_FMT_NONE
     private var height: Int32 = 0
     private var width: Int32 = 0
@@ -41,7 +41,7 @@ class VideoSwscale: FrameTransfer {
             outFrame = nil
         } else {
             let dstFormat = format.bestPixelFormat
-            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, width, height, dstFormat, SWS_BICUBIC, nil, nil, nil)
+            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, width, height, dstFormat, SWS_BICUBIC.rawValue, nil, nil, nil)
             outFrame = av_frame_alloc()
             outFrame?.pointee.format = dstFormat.rawValue
             outFrame?.pointee.width = width
@@ -65,7 +65,7 @@ class VideoSwscale: FrameTransfer {
 }
 
 class VideoSwresample: FrameChange {
-    private var imgConvertCtx: OpaquePointer?
+    private var imgConvertCtx: UnsafeMutablePointer<SwsContext>?
     private var format: AVPixelFormat = AV_PIX_FMT_NONE
     private var height: Int32 = 0
     private var width: Int32 = 0
@@ -112,7 +112,7 @@ class VideoSwresample: FrameChange {
             pixelFormatType = dstFormat.osType()!
 //            imgConvertCtx = sws_getContext(width, height, self.format, width, height, dstFormat, SWS_FAST_BILINEAR, nil, nil, nil)
             // AV_PIX_FMT_VIDEOTOOLBOX格式是无法进行swscale的
-            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, dstWidth, dstHeight, dstFormat, SWS_FAST_BILINEAR, nil, nil, nil)
+            imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, dstWidth, dstHeight, dstFormat, SWS_FAST_BILINEAR.rawValue, nil, nil, nil)
         }
         pool = CVPixelBufferPool.create(width: dstWidth, height: dstHeight, bytesPerRowAlignment: linesize, pixelFormatType: pixelFormatType)
     }
@@ -148,7 +148,7 @@ class VideoSwresample: FrameChange {
         guard let pool else {
             return nil
         }
-        return autoreleasepool {
+        return autoreleasepool { () -> CVPixelBuffer? in
             var pbuf: CVPixelBuffer?
             let ret = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pbuf)
             guard let pbuf, ret == kCVReturnSuccess else {

@@ -22,7 +22,7 @@ public class KSMEPlayer: NSObject {
     private var sessionActive = true
     private var deliveredReady = false
     private var deliveredFailure = false
-    private var savedTrackIDs: [AVMediaType: Set<Int32>]?
+    private var savedTrackIDs: [AVFoundation.AVMediaType: Set<Int32>]?
     private var savedRecoveryTime: TimeInterval?
     private var userHardwareDecode: Bool
     private var userAsyncDecode: Bool
@@ -754,7 +754,10 @@ extension KSMEPlayer: DisplayLayerDelegate {
                 (_pipController as? KSPictureInPictureController)?.stopPictureInPicture()
             }
         }
-        delegate?.changeLoadState(player: self)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.delegate?.changeLoadState(player: self)
+        }
     }
 
     public func change(displayLayer: AVSampleBufferDisplayLayer) {
@@ -787,7 +790,10 @@ private extension KSMEPlayer {
         playerItem.shutdown()
         playbackState = .stopped
         loadState = .idle
-        delegate?.finish(player: self, error: error)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.delegate?.finish(player: self, error: error)
+        }
     }
 
     func connectSubtitleRenderer() {

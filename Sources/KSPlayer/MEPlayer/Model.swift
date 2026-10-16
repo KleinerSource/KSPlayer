@@ -444,7 +444,7 @@ extension VideoVTBFrame {
     @available(iOS 16, *)
     var edrMetadata: CAEDRMetadata? {
         if doviMetadata != nil {
-            return CAEDRMetadata.hdr10(minLuminance: 0.0001, maxLuminance: Double(contentPeakNits ?? 1000), opticalOutputScale: 10000)
+            return CAEDRMetadata.hdr10(minLuminance: 0.0001, maxLuminance: Float(contentPeakNits ?? 1000), opticalOutputScale: 10000)
         }
         if var contentData = edrMetaData?.contentData, var displayData = edrMetaData?.displayData {
             let data = Data(bytes: &displayData, count: MemoryLayout<MasteringDisplayMetadata>.stride)
