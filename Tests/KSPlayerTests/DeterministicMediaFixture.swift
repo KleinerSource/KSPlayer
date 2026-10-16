@@ -21,7 +21,7 @@ enum DeterministicMediaFixture {
         writer.add(input)
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
-        for index in 0 ..< 90 {
+        for index in 0 ..< 30 {
             while !input.isReadyForMoreMediaData {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.001))
             }
@@ -43,7 +43,7 @@ enum DeterministicMediaFixture {
                 }
             }
             CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-            guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(index), timescale: 30)) else {
+            guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10)) else {
                 throw writer.error ?? NSError(domain: "KSPlayerTests", code: 3)
             }
         }

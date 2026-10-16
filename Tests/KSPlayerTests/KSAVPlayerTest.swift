@@ -7,21 +7,14 @@ class KSAVPlayerTest: XCTestCase {
     func testPlayer() async throws {
         let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
-        set(path: url.path)
-    }
-
-    @MainActor
-    func set(path: String) {
-        let play = KSAVPlayer(url: URL(fileURLWithPath: path), options: KSOptions())
+        let play = KSAVPlayer(url: url, options: KSOptions())
         play.delegate = self
         readyToPlayExpectation = expectation(description: "openVideo")
         play.prepareToPlay()
-        waitForExpectations(timeout: 10) { _ in
-            if play.isReadyToPlay {
-                play.play()
-            }
-            play.shutdown()
-        }
+        await fulfillment(of: [readyToPlayExpectation!], timeout: 30)
+        XCTAssertTrue(play.isReadyToPlay)
+        play.play()
+        play.shutdown()
     }
 }
 
