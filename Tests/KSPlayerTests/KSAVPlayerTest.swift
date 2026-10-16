@@ -4,8 +4,8 @@ import XCTest
 class KSAVPlayerTest: XCTestCase {
     private var readyToPlayExpectation: XCTestExpectation?
     @MainActor
-    func testPlayer() throws {
-        let url = try DeterministicMediaFixture.videoURL()
+    func testPlayer() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         set(path: url.path)
     }

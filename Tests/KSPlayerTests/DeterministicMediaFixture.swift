@@ -3,7 +3,7 @@ import CoreVideo
 import Foundation
 
 enum DeterministicMediaFixture {
-    static func videoURL() throws -> URL {
+    static func videoURL() async throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("KSPlayer-\(UUID().uuidString).mp4")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -21,7 +21,7 @@ enum DeterministicMediaFixture {
         writer.add(input)
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
-        for index in 0 ..< 30 {
+        for index in 0 ..< 90 {
             while !input.isReadyForMoreMediaData {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.001))
             }
@@ -48,9 +48,9 @@ enum DeterministicMediaFixture {
             }
         }
         input.markAsFinished()
-        let semaphore = DispatchSemaphore(value: 0)
-        writer.finishWriting { semaphore.signal() }
-        _ = semaphore.wait(timeout: .now() + 10)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writer.finishWriting { continuation.resume() }
+        }
         guard writer.status == .completed else { throw writer.error ?? NSError(domain: "KSPlayerTests", code: 4) }
         return url
     }

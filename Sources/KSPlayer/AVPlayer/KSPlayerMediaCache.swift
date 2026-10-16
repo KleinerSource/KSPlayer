@@ -194,7 +194,7 @@ public final class KSPlayerMediaCache: NSObject, @unchecked Sendable {
 
     /// Enforces the configured capacity using least-recently-used entries.
     public func purge() {
-        lock.withLock { evictIfNeeded(excluding: []) }
+        lock.withLock { evictIfNeeded(excluding: Set(activeKeys.keys)) }
     }
 
     internal func makeAVAsset(url: URL, headers: [String: String] = [:]) async -> (asset: AVURLAsset, loader: KSPlayerMediaCacheResourceLoader)? {

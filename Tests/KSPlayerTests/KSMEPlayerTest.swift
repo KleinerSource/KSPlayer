@@ -3,8 +3,8 @@ import XCTest
 
 class KSMEPlayerTest: XCTestCase {
     @MainActor
-    func testPlaying() throws {
-        let url = try DeterministicMediaFixture.videoURL()
+    func testPlaying() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         let player = KSMEPlayer(url: url, options: KSOptions())
         player.delegate = self
@@ -16,8 +16,8 @@ class KSMEPlayerTest: XCTestCase {
     }
 
     @MainActor
-    func testAutoPlay() throws {
-        let url = try DeterministicMediaFixture.videoURL()
+    func testAutoPlay() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         let player = KSMEPlayer(url: url, options: KSOptions())
         player.delegate = self

@@ -9,15 +9,15 @@ class KSPlayerLayerTest: XCTestCase {
         KSOptions.isAccurateSeek = true
     }
 
-    func testPlayerLayer() throws {
-        let url = try DeterministicMediaFixture.videoURL()
+    func testPlayerLayer() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         set(path: url.path)
     }
 
     func set(path: String) {
         let options = KSOptions()
-        let playerLayer = KSPlayerLayer(url: URL(fileURLWithPath: path), options: options)
+        let playerLayer = KSPlayerLayer(url: URL(fileURLWithPath: path), isAutoPlay: false, options: options)
         playerLayer.delegate = self
         XCTAssertEqual(playerLayer.state, .preparing)
         readyToPlayExpectation = expectation(description: "openVideo")

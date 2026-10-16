@@ -6,7 +6,7 @@ final class KSPlayerPreviewTest: XCTestCase, MediaPlayerDelegate {
     private var readyExpectation: XCTestExpectation?
 
     func testAVPlayerPreviewFramesAreSorted() async throws {
-        let url = try DeterministicMediaFixture.videoURL()
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         let player = KSAVPlayer(url: url, options: KSOptions())
         player.delegate = self
@@ -21,14 +21,18 @@ final class KSPlayerPreviewTest: XCTestCase, MediaPlayerDelegate {
     }
 
     func testFFmpegPreviewFramesAreSorted() async throws {
-        let url = try DeterministicMediaFixture.videoURL()
+        let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
         let player = KSMEPlayer(url: url, options: KSOptions())
+        defer { player.shutdown() }
+        player.delegate = self
+        readyExpectation = expectation(description: "FFmpeg player ready")
+        player.prepareToPlay()
+        await fulfillment(of: [readyExpectation!], timeout: 10)
         let frames = try await player.generatePreviewThumbnails()
         XCTAssertFalse(frames.isEmpty)
         XCTAssertEqual(frames.map(\.time), frames.map(\.time).sorted())
         XCTAssertTrue(frames.allSatisfy { $0.image.width <= 240 })
-        player.shutdown()
     }
 
     func readyToPlay(player _: some MediaPlayerProtocol) {
