@@ -1,14 +1,14 @@
 {
-  "pins" : [
+  "pins": [
     {
-      "identity" : "ffmpegkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/kingslay/FFmpegKit.git",
-      "state" : {
-        "revision" : "85b77c589de0360c111de16752db86b60496d70b",
-        "version" : "6.1.3"
+      "identity": "ffmpegkit",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/KleinerSource/FFmpegKit.git",
+      "state": {
+        "branch": "senplayer-ffmpeg81",
+        "revision": "831cd21b285498b7beb49d868824d75198049b68"
       }
     }
   ],
-  "version" : 2
+  "version": 2
 }

@@ -35,6 +35,20 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
     // video
     public private(set) var rotation: Int16 = 0
     public var dovi: DOVIDecoderConfigurationRecord?
+    private let decoderLock = NSLock()
+    private var decoderName: String?
+    public internal(set) var actualDecoder: String? {
+        get {
+            decoderLock.lock()
+            defer { decoderLock.unlock() }
+            return decoderName
+        }
+        set {
+            decoderLock.lock()
+            defer { decoderLock.unlock() }
+            decoderName = newValue
+        }
+    }
     public let fieldOrder: FFmpegFieldOrder
     public let formatDescription: CMFormatDescription?
     var closedCaptionsTrack: FFmpegAssetTrack?
@@ -185,13 +199,21 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         } else if codecpar.codec_type == AVMEDIA_TYPE_VIDEO {
             audioDescriptor = nil
             mediaType = .video
-            // Do not dereference codecpar.coded_side_data here. Some Matroska
-            // files expose a non-null but invalid DOVI payload pointer (for
-            // example, 0x7c8). A raw FFmpeg pointer cannot be made safe by
-            // checking its size in Swift, and this optional metadata is not
-            // required to create or decode the video track. Leave `dovi` nil
-            // for the FFmpeg player rather than terminating the app while
-            // opening an otherwise playable file.
+            // FFmpeg headers and libraries must use the same pinned 8.1 ABI.
+            // Query the public side-data API rather than assuming a Swift
+            // tuple/struct layout from the former FFmpeg 6 build.
+            if let side = av_packet_side_data_get(codecpar.coded_side_data, codecpar.nb_coded_side_data, AV_PKT_DATA_DOVI_CONF)?.pointee,
+               side.size >= MemoryLayout<AVDOVIDecoderConfigurationRecord>.size, let bytes = side.data
+            {
+                let config = UnsafeRawPointer(bytes).loadUnaligned(as: AVDOVIDecoderConfigurationRecord.self)
+                dovi = DOVIDecoderConfigurationRecord(dv_version_major: config.dv_version_major,
+                                                     dv_version_minor: config.dv_version_minor,
+                                                     dv_profile: config.dv_profile, dv_level: config.dv_level,
+                                                     rpu_present_flag: config.rpu_present_flag,
+                                                     el_present_flag: config.el_present_flag,
+                                                     bl_present_flag: config.bl_present_flag,
+                                                     dv_bl_signal_compatibility_id: config.dv_bl_signal_compatibility_id)
+            }
             let sar = codecpar.sample_aspect_ratio.size
             var extradataSize = Int32(0)
             var extradata = codecpar.extradata

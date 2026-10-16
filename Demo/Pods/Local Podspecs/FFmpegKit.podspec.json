@@ -3,13 +3,13 @@
   "version": "6.1.0",
   "summary": "FFmpegKit",
   "description": "FFmpeg",
-  "homepage": "https://github.com/kingslay/FFmpegKit",
+  "homepage": "https://github.com/KleinerSource/FFmpegKit",
   "authors": {
     "kintan": "554398854@qq.com"
   },
   "license": "MIT",
   "source": {
-    "git": "https://github.com/kingslay/FFmpegKit.git",
+    "git": "https://github.com/KleinerSource/FFmpegKit.git",
     "tag": "6.1.0"
   },
   "platforms": {

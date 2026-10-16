@@ -89,7 +89,6 @@ public class ThumbnailController {
         }
         var codecContext = try videoStream.pointee.codecpar.pointee.createContext(options: nil)
         defer {
-            avcodec_close(codecContext)
             var codecContext: UnsafeMutablePointer<AVCodecContext>? = codecContext
             avcodec_free_context(&codecContext)
         }

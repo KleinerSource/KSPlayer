@@ -16,6 +16,29 @@ public final class MEPlayerItem: Sendable {
     private let options: KSOptions
     private let operationQueue = OperationQueue()
     private let condition = NSCondition()
+    private let ioLock = NSLock()
+    private var ioCancelled = false
+    private var ioDeadline: CFTimeInterval?
+
+    private var shouldInterruptIO: Bool {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        return ioCancelled || ioDeadline.map { CACurrentMediaTime() >= $0 } == true
+    }
+
+    private func beginIO(timeout: TimeInterval?) {
+        ioLock.lock()
+        ioDeadline = timeout.map { CACurrentMediaTime() + $0 }
+        ioLock.unlock()
+    }
+
+    private func finishIO(_ result: Int32) -> Int32 {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        let timedOut = !ioCancelled && ioDeadline.map { CACurrentMediaTime() >= $0 } == true
+        ioDeadline = nil
+        return timedOut ? -Int32(ETIMEDOUT) : result
+    }
     private var formatCtx: UnsafeMutablePointer<AVFormatContext>?
     private var outputFormatCtx: UnsafeMutablePointer<AVFormatContext>?
     private var outputPacket: UnsafeMutablePointer<AVPacket>?
@@ -56,6 +79,8 @@ public final class MEPlayerItem: Sendable {
     private var seekTime = TimeInterval(0)
     private var startTime = CMTime.zero
     public private(set) var duration: TimeInterval = 0
+    public var isLive: Bool { duration <= 0 || !duration.isFinite }
+    var restoredTrackIDs: [AVMediaType: Set<Int32>] = [:]
     public private(set) var fileSize: Double = 0
     public private(set) var naturalSize = CGSize.zero
     private var error: NSError? {
@@ -70,13 +95,13 @@ public final class MEPlayerItem: Sendable {
         didSet {
             switch state {
             case .opened:
-                delegate?.sourceDidOpened()
+                delegate?.sourceDidOpened(source: self)
             case .reading:
                 timer.fireDate = Date.distantPast
             case .closed:
                 timer.invalidate()
             case .failed:
-                delegate?.sourceDidFailed(error: error)
+                delegate?.sourceDidFailed(source: self, error: error)
                 timer.fireDate = Date.distantFuture
             case .idle, .opening, .seeking, .paused, .finished:
                 break
@@ -110,8 +135,13 @@ public final class MEPlayerItem: Sendable {
             if let arguments {
                 log = NSString(format: log, arguments: arguments) as String
             }
-            if let ptr {
-                let avclass = ptr.assumingMemoryBound(to: UnsafePointer<AVClass>.self).pointee
+            if let ptr, let avclass = ptr.assumingMemoryBound(to: UnsafePointer<AVClass>?.self).pointee {
+                // Protocol debug/trace dumps include raw RTMP AMF strings and
+                // RTSP header bytes, which cannot be safely redacted afterward.
+                if level > LogLevel.warning.rawValue,
+                   avclass.pointee.category != AV_CLASS_CATEGORY_DECODER,
+                   avclass.pointee.category != AV_CLASS_CATEGORY_FILTER
+                { return }
                 if avclass == avfilter_get_class() {
                     let context = ptr.assumingMemoryBound(to: AVFilterContext.self).pointee
                     if let opaque = context.graph?.pointee.opaque {
@@ -119,7 +149,7 @@ public final class MEPlayerItem: Sendable {
                         options.filter(log: log)
                     }
                 }
-            }
+            } else if level > LogLevel.warning.rawValue { return }
             // 找不到解码器
             if log.hasPrefix("parser not found for codec") {
                 KSLog(level: .error, log)
@@ -130,6 +160,7 @@ public final class MEPlayerItem: Sendable {
 
     weak var delegate: MEPlayerDelegate?
     public init(url: URL, options: KSOptions) {
+        options.configureStreaming(url: url)
         self.url = url
         self.options = options
         timer.fireDate = Date.distantFuture
@@ -160,6 +191,7 @@ public final class MEPlayerItem: Sendable {
                 return false
             }
         }
+        guard seekable else { return false }
         seek(time: currentPlaybackTime) { _ in
         }
         return true
@@ -184,12 +216,7 @@ extension MEPlayerItem {
                 return 0
             }
             let formatContext = Unmanaged<MEPlayerItem>.fromOpaque(ctx).takeUnretainedValue()
-            switch formatContext.state {
-            case .finished, .closed, .failed:
-                return 1
-            default:
-                return 0
-            }
+            return formatContext.shouldInterruptIO ? 1 : 0
         }
         formatCtx.pointee.interrupt_callback = interruptCB
         // avformat_close_input这个函数会调用io_close2。但是自定义协议是不会调用io_close2这个函数
@@ -215,13 +242,16 @@ extension MEPlayerItem {
         } else {
             urlString = url.absoluteString
         }
+        beginIO(timeout: options.networkConnectTimeout)
         var result = avformat_open_input(&self.formatCtx, urlString, nil, &avOptions)
+        result = finishIO(result)
         av_dict_free(&avOptions)
+        guard !shouldInterruptIO else { return }
         if result == AVError.eof.code {
             state = .finished
             releaseCustomIO()
             avformat_close_input(&self.formatCtx)
-            delegate?.sourceDidFinished()
+            delegate?.sourceDidFinished(source: self)
             return
         }
         guard result == 0 else {
@@ -241,7 +271,10 @@ extension MEPlayerItem {
         if let maxAnalyzeDuration = options.maxAnalyzeDuration {
             formatCtx.pointee.max_analyze_duration = maxAnalyzeDuration
         }
+        beginIO(timeout: options.networkReadTimeout)
         result = avformat_find_stream_info(formatCtx, nil)
+        result = finishIO(result)
+        guard !shouldInterruptIO else { return }
         guard result == 0 else {
             error = .init(errorCode: .formatFindStreamInfo, avErrorCode: result)
             releaseCustomIO()
@@ -262,7 +295,17 @@ extension MEPlayerItem {
         }
         duration = TimeInterval(max(formatCtx.pointee.duration, 0)) / TimeInterval(AV_TIME_BASE)
         fileSize = Double(formatCtx.pointee.bit_rate) * duration / 8
+        if isLive {
+            options.startPlayTime = 0
+            options.preferredForwardBufferDuration = 1
+            options.maxBufferDuration = 5
+        }
         createCodec(formatCtx: formatCtx)
+        for track in assetTracks {
+            if let selected = restoredTrackIDs[track.mediaType] {
+                track.isEnabled = selected.contains(track.trackID)
+            }
+        }
         if formatCtx.pointee.nb_chapters > 0 {
             chapters.removeAll()
             for i in 0 ..< formatCtx.pointee.nb_chapters {
@@ -374,7 +417,9 @@ extension MEPlayerItem {
         if !options.videoDisable {
             let videos = assetTracks.filter { $0.mediaType == .video }
             let wantedStreamNb: Int32
-            if !videos.isEmpty, let index = options.wantedVideo(tracks: videos) {
+            if let selected = restoredTrackIDs[.video]?.first, videos.contains(where: { $0.trackID == selected }) {
+                wantedStreamNb = selected
+            } else if !videos.isEmpty, let index = options.wantedVideo(tracks: videos) {
                 wantedStreamNb = videos[index].trackID
             } else {
                 wantedStreamNb = -1
@@ -418,7 +463,9 @@ extension MEPlayerItem {
 
         let audios = assetTracks.filter { $0.mediaType == .audio }
         let wantedStreamNb: Int32
-        if !audios.isEmpty, let index = options.wantedAudio(tracks: audios) {
+        if let selected = restoredTrackIDs[.audio]?.first, audios.contains(where: { $0.trackID == selected }) {
+            wantedStreamNb = selected
+        } else if !audios.isEmpty, let index = options.wantedAudio(tracks: audios) {
             wantedStreamNb = audios[index].trackID
         } else {
             wantedStreamNb = -1
@@ -546,7 +593,8 @@ extension MEPlayerItem {
         guard let corePacket = packet.corePacket else {
             return 0
         }
-        let readResult = av_read_frame(formatCtx, corePacket)
+        beginIO(timeout: options.networkReadTimeout)
+        let readResult = finishIO(av_read_frame(formatCtx, corePacket))
         if state == .closed {
             return 0
         }
@@ -614,7 +662,7 @@ extension MEPlayerItem {
                 }
             }
         } else {
-            if readResult == AVError.eof.code || avio_feof(formatCtx?.pointee.pb) > 0 {
+            if readResult == AVError.eof.code || (avio_feof(formatCtx?.pointee.pb) > 0 && (formatCtx?.pointee.pb?.pointee.error ?? 0) == 0) {
                 if options.isLoopPlay, allPlayerItemTracks.allSatisfy({ !$0.isLoopModel }) {
                     allPlayerItemTracks.forEach { $0.isLoopModel = true }
                     _ = av_seek_frame(formatCtx, -1, startTime.value, AVSEEK_FLAG_BACKWARD)
@@ -659,7 +707,7 @@ extension MEPlayerItem {
 
 extension MEPlayerItem: MediaPlayback {
     var seekable: Bool {
-        guard let formatCtx else {
+        guard let formatCtx, duration > 0, duration.isFinite else {
             return false
         }
         var seekable = true
@@ -685,6 +733,9 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func shutdown() {
+        ioLock.lock()
+        ioCancelled = true
+        ioLock.unlock()
         guard state != .closed else { return }
         state = .closed
         av_packet_free(&outputPacket)
@@ -752,9 +803,19 @@ extension MEPlayerItem: MediaPlayback {
 }
 
 extension MEPlayerItem: CodecCapacityDelegate {
+    func codecDidFailed(error: Error) {
+        guard state != .closed, state != .failed else { return }
+        ioLock.lock()
+        ioCancelled = true
+        ioLock.unlock()
+        // Wake a reader blocked on the failed decoder's full packet queue.
+        allPlayerItemTracks.forEach { $0.shutdown() }
+        self.error = error as NSError
+    }
+
     func codecDidChangeCapacity() {
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
-        delegate?.sourceDidChange(loadingState: loadingState)
+        delegate?.sourceDidChange(source: self, loadingState: loadingState)
         if loadingState.isPlayable {
             isFirst = false
             isSeek = false
@@ -778,13 +839,13 @@ extension MEPlayerItem: CodecCapacityDelegate {
         if allSatisfy {
             // 区间循环 swap：当前 iteration 的 packet/frame 全播完，把 loopPacketQueue 切换为活动 queue。
             // 与 isLoopPlay 整文件循环的差异：
-            // 1. 不调 delegate?.sourceDidFinished()——避免上层把 playbackState 翻成 .finished
+            // 1. 不调 delegate?.sourceDidFinished(source: self)——避免上层把 playbackState 翻成 .finished
             // 2. 不停 capacity timer（timer.fireDate = .distantFuture）——下一圈仍要继续工作
             // 3. 设 track.seekTime 让 decoder 丢弃 loopPacketQueue 头部不需要的预滚帧
             //
             // 判断条件用 audioTrack?.isLoopModel / videoTrack?.isLoopModel 而非 options.loopRange != nil：
             // 调用方中途清空 loopRange 时，若刚好处于"trigger 已发生 swap 还没发生"窗口内，
-            // tracks 仍处 loopModel——此时若不走本分支，会掉到下方 delegate?.sourceDidFinished()
+            // tracks 仍处 loopModel——此时若不走本分支，会掉到下方 delegate?.sourceDidFinished(source: self)
             // 把 playbackState 置为 .finished，且无法通过 play() 恢复（所有 track 已 EOF 无帧可解）。
             if !options.isLoopPlay && (audioTrack?.isLoopModel == true || videoTrack?.isLoopModel == true) {
                 isAudioStalled = audioTrack == nil
@@ -804,7 +865,7 @@ extension MEPlayerItem: CodecCapacityDelegate {
                 videoTrack?.isLoopModel = false
                 return
             }
-            delegate?.sourceDidFinished()
+            delegate?.sourceDidFinished(source: self)
             timer.fireDate = Date.distantFuture
             if options.isLoopPlay {
                 isAudioStalled = audioTrack == nil
@@ -837,7 +898,7 @@ extension MEPlayerItem: CodecCapacityDelegate {
         findBestAudio(videoTrack: newFFmpegAssetTrack)
         let bitRateState = VideoAdaptationState.BitRateState(bitRate: newBitrate, time: CACurrentMediaTime())
         videoAdaptation?.bitRateStates.append(bitRateState)
-        delegate?.sourceDidChange(oldBitRate: oldBitRate, newBitrate: newBitrate)
+        delegate?.sourceDidChange(source: self, oldBitRate: oldBitRate, newBitrate: newBitrate)
     }
 
     private func findBestAudio(videoTrack: FFmpegAssetTrack) {
@@ -950,7 +1011,7 @@ extension AbstractAVIOContext {
             let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque!).takeUnretainedValue()
             let ret = value.read(buffer: buffer, size: size)
             return Int32(ret)
-        } _: { opaque, buffer, size -> Int32 in
+        } _: { (opaque: UnsafeMutableRawPointer?, buffer: UnsafePointer<UInt8>?, size: Int32) -> Int32 in
             let value = Unmanaged<AbstractAVIOContext>.fromOpaque(opaque!).takeUnretainedValue()
             let ret = value.write(buffer: buffer, size: size)
             return Int32(ret)

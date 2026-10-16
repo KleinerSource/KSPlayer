@@ -24,6 +24,7 @@ class MetalRender {
 
     private let renderPassDescriptor = MTLRenderPassDescriptor()
     private let commandQueue = MetalRender.device.makeCommandQueue()
+    private let colorModel = DoviDisplayModel()
     private lazy var samplerState: MTLSamplerState? = {
         let samplerDescriptor = MTLSamplerDescriptor()
         samplerDescriptor.minFilter = .linear
@@ -90,14 +91,21 @@ class MetalRender {
     }
 
     @MainActor
-    func draw(pixelBuffer: PixelBufferProtocol, display: DisplayEnum = .plane, drawable: CAMetalDrawable) {
+    func draw(pixelBuffer: PixelBufferProtocol, display: DisplayEnum = .plane, drawable: CAMetalDrawable,
+              colorFrame: VideoVTBFrame? = nil, hdrOutput: Bool = false) {
         let inputTextures = pixelBuffer.textures()
         renderPassDescriptor.colorAttachments[0].texture = drawable.texture
         guard !inputTextures.isEmpty, let commandBuffer = commandQueue?.makeCommandBuffer(), let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return
         }
         encoder.pushDebugGroup("RenderFrame")
-        let state = display.pipeline(planeCount: pixelBuffer.planeCount, bitDepth: pixelBuffer.bitDepth)
+        let state: MTLRenderPipelineState
+        if let colorFrame {
+            state = colorModel.pipeline(planeCount: pixelBuffer.planeCount, display: display, format: drawable.texture.pixelFormat)
+            colorModel.set(frame: colorFrame, pixelBuffer: pixelBuffer, hdrOutput: hdrOutput, encoder: encoder)
+        } else {
+            state = display.pipeline(planeCount: pixelBuffer.planeCount, bitDepth: pixelBuffer.bitDepth)
+        }
         encoder.setRenderPipelineState(state)
         encoder.setFragmentSamplerState(samplerState, index: 0)
         for (index, texture) in inputTextures.enumerated() {
@@ -135,9 +143,10 @@ class MetalRender {
         }
     }
 
-    static func makePipelineState(fragmentFunction: String, isSphere: Bool = false, bitDepth: Int32 = 8) -> MTLRenderPipelineState {
+    static func makePipelineState(fragmentFunction: String, isSphere: Bool = false, bitDepth: Int32 = 8,
+                                  pixelFormat: MTLPixelFormat? = nil) -> MTLRenderPipelineState {
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.colorAttachments[0].pixelFormat = KSOptions.colorPixelFormat(bitDepth: bitDepth)
+        descriptor.colorAttachments[0].pixelFormat = pixelFormat ?? KSOptions.colorPixelFormat(bitDepth: bitDepth)
         descriptor.vertexFunction = library.makeFunction(name: isSphere ? "mapSphereTexture" : "mapTexture")
         descriptor.fragmentFunction = library.makeFunction(name: fragmentFunction)
         let vertexDescriptor = MTLVertexDescriptor()

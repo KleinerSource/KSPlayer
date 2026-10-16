@@ -37,14 +37,15 @@ public protocol OutputRenderSourceDelegate: AnyObject {
 
 protocol CodecCapacityDelegate: AnyObject {
     func codecDidFinished(track: some CapacityProtocol)
+    func codecDidFailed(error: Error)
 }
 
 protocol MEPlayerDelegate: AnyObject {
-    func sourceDidChange(loadingState: LoadingState)
-    func sourceDidOpened()
-    func sourceDidFailed(error: NSError?)
-    func sourceDidFinished()
-    func sourceDidChange(oldBitRate: Int64, newBitrate: Int64)
+    func sourceDidChange(source: MEPlayerItem, loadingState: LoadingState)
+    func sourceDidOpened(source: MEPlayerItem)
+    func sourceDidFailed(source: MEPlayerItem, error: NSError?)
+    func sourceDidFinished(source: MEPlayerItem)
+    func sourceDidChange(source: MEPlayerItem, oldBitRate: Int64, newBitrate: Int64)
 }
 
 // MARK: protocol
@@ -426,6 +427,10 @@ public final class VideoVTBFrame: MEFrame {
     public var size: Int32 = 0
     public let fps: Float
     public let isDovi: Bool
+    public internal(set) var doviProfile: Int?
+    var doviMetadata: DoviMetadata?
+    var rpuData: Data?
+    var contentPeakNits: Float?
     public var edrMetaData: EDRMetaData? = nil
     var corePixelBuffer: PixelBufferProtocol?
     init(fps: Float, isDovi: Bool) {
@@ -438,6 +443,9 @@ extension VideoVTBFrame {
     #if !os(tvOS)
     @available(iOS 16, *)
     var edrMetadata: CAEDRMetadata? {
+        if doviMetadata != nil {
+            return CAEDRMetadata.hdr10(minLuminance: 0.0001, maxLuminance: Double(contentPeakNits ?? 1000), opticalOutputScale: 10000)
+        }
         if var contentData = edrMetaData?.contentData, var displayData = edrMetaData?.displayData {
             let data = Data(bytes: &displayData, count: MemoryLayout<MasteringDisplayMetadata>.stride)
             let data2 = Data(bytes: &contentData, count: MemoryLayout<ContentLightMetadata>.stride)
@@ -468,16 +476,16 @@ public struct EDRMetaData {
 }
 
 public struct MasteringDisplayMetadata {
-    let display_primaries_r_x: UInt16
-    let display_primaries_r_y: UInt16
     let display_primaries_g_x: UInt16
     let display_primaries_g_y: UInt16
     let display_primaries_b_x: UInt16
     let display_primaries_b_y: UInt16
+    let display_primaries_r_x: UInt16
+    let display_primaries_r_y: UInt16
     let white_point_x: UInt16
     let white_point_y: UInt16
-    let minLuminance: UInt32
     let maxLuminance: UInt32
+    let minLuminance: UInt32
 }
 
 public struct ContentLightMetadata {

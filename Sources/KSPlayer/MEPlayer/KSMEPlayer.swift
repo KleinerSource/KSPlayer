@@ -8,6 +8,7 @@
 import AVFoundation
 import AVKit
 import Foundation
+import Libavutil
 #if canImport(UIKit)
 import UIKit
 #else
@@ -15,6 +16,27 @@ import AppKit
 #endif
 
 public class KSMEPlayer: NSObject {
+    private var recovery = PlaybackRecovery()
+    private var recoveryWork: DispatchWorkItem?
+    private var sessionGeneration: UInt64 = 0
+    private var sessionActive = true
+    private var deliveredReady = false
+    private var deliveredFailure = false
+    private var savedTrackIDs: [AVMediaType: Set<Int32>]?
+    private var savedRecoveryTime: TimeInterval?
+    private var userHardwareDecode: Bool
+    private var userAsyncDecode: Bool
+    private var userStartPlayTime: TimeInterval
+    private var userForwardBufferDuration: TimeInterval
+    private var userMaxBufferDuration: TimeInterval
+    public var subtitleDelay: TimeInterval = 0 {
+        didSet {
+            tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }.forEach {
+                $0.delay = subtitleDelay
+            }
+            (videoOutput as? MetalPlayView)?.clearSubtitles()
+        }
+    }
     private var loopCount = 1
     private var playerItem: MEPlayerItem
     private var sourceURL: URL
@@ -53,7 +75,8 @@ public class KSMEPlayer: NSObject {
 
     @available(tvOS 14.0, *)
     public var pipController: KSPictureInPictureController? {
-        _pipController as? KSPictureInPictureController
+        guard (videoOutput as? MetalPlayView)?.supportsPictureInPicture == true else { return nil }
+        return _pipController as? KSPictureInPictureController
     }
 
     private lazy var _playbackCoordinator: Any? = {
@@ -119,6 +142,11 @@ public class KSMEPlayer: NSObject {
     }
 
     public required init(url: URL, options: KSOptions) {
+        userHardwareDecode = options.hardwareDecode
+        userAsyncDecode = options.asynchronousDecompression
+        userStartPlayTime = options.startPlayTime
+        userForwardBufferDuration = options.preferredForwardBufferDuration
+        userMaxBufferDuration = options.maxBufferDuration
         KSOptions.setAudioSession()
         audioOutput = KSOptions.audioPlayerType.init()
         playerItem = MEPlayerItem(url: url, options: options)
@@ -134,6 +162,7 @@ public class KSMEPlayer: NSObject {
         audioOutput.renderSource = playerItem
         videoOutput?.renderSource = playerItem
         videoOutput?.displayLayerDelegate = self
+        connectSubtitleRenderer()
         #if !os(macOS)
         NotificationCenter.default.addObserver(self, selector: #selector(audioRouteChange), name: AVAudioSession.routeChangeNotification, object: AVAudioSession.sharedInstance())
         if #available(tvOS 15.0, iOS 15.0, *) {
@@ -143,6 +172,7 @@ public class KSMEPlayer: NSObject {
     }
 
     deinit {
+        recoveryWork?.cancel()
         #if !os(macOS)
         try? AVAudioSession.sharedInstance().setPreferredOutputNumberOfChannels(2)
         #endif
@@ -196,100 +226,136 @@ private extension KSMEPlayer {
 }
 
 extension KSMEPlayer: MEPlayerDelegate {
-    func sourceDidOpened() {
-        isReadyToPlay = true
-        options.readyTime = CACurrentMediaTime()
-        let vidoeTracks = tracks(mediaType: .video)
-        if vidoeTracks.isEmpty {
-            videoOutput = nil
-        }
-        let audioDescriptor = tracks(mediaType: .audio).first { $0.isEnabled }.flatMap {
-            $0 as? FFmpegAssetTrack
-        }?.audioDescriptor
+    func sourceDidOpened(source: MEPlayerItem) {
+        let generation = sessionGeneration
         runOnMainThread { [weak self] in
-            guard let self else { return }
-            if let audioDescriptor {
-                KSLog("[audio] audio type: \(audioOutput) prepare audioFormat )")
-                audioOutput.prepare(audioFormat: audioDescriptor.audioFormat)
+            guard let self, self.sessionActive, generation == self.sessionGeneration, source === self.playerItem else { return }
+            savedTrackIDs = nil
+            savedRecoveryTime = nil
+            isReadyToPlay = true
+            tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }.forEach {
+                $0.delay = subtitleDelay
             }
-            if let controlTimebase = videoOutput?.displayLayer.controlTimebase, options.startPlayTime > 1 {
-                CMTimebaseSetTime(controlTimebase, time: CMTimeMake(value: Int64(options.startPlayTime), timescale: 1))
+            options.readyTime = CACurrentMediaTime()
+            let vidoeTracks = tracks(mediaType: .video)
+            if vidoeTracks.isEmpty {
+                videoOutput = nil
             }
-            delegate?.readyToPlay(player: self)
+            let audioDescriptor = tracks(mediaType: .audio).first { $0.isEnabled }.flatMap {
+                $0 as? FFmpegAssetTrack
+            }?.audioDescriptor
+            runOnMainThread { [weak self] in
+                guard let self else { return }
+                if let audioDescriptor {
+                    KSLog("[audio] audio type: \(audioOutput) prepare audioFormat )")
+                    audioOutput.prepare(audioFormat: audioDescriptor.audioFormat)
+                }
+                if let controlTimebase = videoOutput?.displayLayer.controlTimebase, options.startPlayTime > 1 {
+                    CMTimebaseSetTime(controlTimebase, time: CMTimeMake(value: Int64(options.startPlayTime), timescale: 1))
+                }
+                guard !deliveredReady else { return }
+                deliveredReady = true
+                delegate?.readyToPlay(player: self)
+            }
         }
     }
 
-    func sourceDidFailed(error: NSError?) {
+    func sourceDidFailed(source: MEPlayerItem, error: NSError?) {
+        let generation = sessionGeneration
         runOnMainThread { [weak self] in
-            guard let self else { return }
-            self.delegate?.finish(player: self, error: error)
+            guard let self, self.sessionActive, generation == self.sessionGeneration, source === self.playerItem else { return }
+            runOnMainThread { [weak self] in
+                guard let self else { return }
+                guard !self.deliveredFailure else { return }
+                if let error, self.recover(error: error) { return }
+                self.finishFailure(error)
+            }
         }
     }
 
-    func sourceDidFinished() {
+    func sourceDidFinished(source: MEPlayerItem) {
+        let generation = sessionGeneration
         runOnMainThread { [weak self] in
-            guard let self else { return }
-            if self.options.isLoopPlay {
-                self.loopCount += 1
-                self.delegate?.playBack(player: self, loopCount: self.loopCount)
-                self.audioOutput.play()
-                self.videoOutput?.play()
+            guard let self, self.sessionActive, !self.deliveredFailure, generation == self.sessionGeneration, source === self.playerItem else { return }
+            runOnMainThread { [weak self] in
+                guard let self else { return }
+                if self.isLive, KSOptions.isStreamingURL(self.sourceURL) {
+                    let error = NSError(errorCode: .readFrame, avErrorCode: -Int32(EIO))
+                    if self.recover(error: error) { return }
+                    self.finishFailure(error)
+                    return
+                }
+                if self.options.isLoopPlay {
+                    self.loopCount += 1
+                    self.delegate?.playBack(player: self, loopCount: self.loopCount)
+                    self.audioOutput.play()
+                    self.videoOutput?.play()
+                } else {
+                    self.playbackState = .finished
+                }
+            }
+        }
+    }
+
+    func sourceDidChange(source: MEPlayerItem, loadingState: LoadingState) {
+        let generation = sessionGeneration
+        runOnMainThread { [weak self] in
+            guard let self, self.sessionActive, generation == self.sessionGeneration, source === self.playerItem else { return }
+            if loadingState.isEndOfFile {
+                playableTime = duration
             } else {
-                self.playbackState = .finished
+                playableTime = currentPlaybackTime + loadingState.loadedTime
             }
-        }
-    }
-
-    func sourceDidChange(loadingState: LoadingState) {
-        if loadingState.isEndOfFile {
-            playableTime = duration
-        } else {
-            playableTime = currentPlaybackTime + loadingState.loadedTime
-        }
-        if loadState == .playable {
-            if !loadingState.isEndOfFile, loadingState.frameCount == 0, loadingState.packetCount == 0, options.preferredForwardBufferDuration != 0 {
-                loadState = .loading
+            if loadState == .playable {
+                if !loadingState.isEndOfFile, loadingState.frameCount == 0, loadingState.packetCount == 0, options.preferredForwardBufferDuration != 0 {
+                    loadState = .loading
+                    if playbackState == .playing {
+                        runOnMainThread { [weak self] in
+                            // 在主线程更新进度
+                            self?.bufferingProgress = 0
+                        }
+                    }
+                }
+            } else {
+                if loadingState.isFirst {
+                    if videoOutput?.pixelBuffer == nil {
+                        videoOutput?.readNextFrame()
+                    }
+                }
+                var progress = 100
+                if loadingState.isPlayable {
+                    loadState = .playable
+                } else {
+                    if loadingState.progress.isInfinite {
+                        progress = 100
+                    } else if loadingState.progress.isNaN {
+                        progress = 0
+                    } else {
+                        progress = min(100, Int(loadingState.progress))
+                    }
+                }
                 if playbackState == .playing {
                     runOnMainThread { [weak self] in
                         // 在主线程更新进度
-                        self?.bufferingProgress = 0
+                        self?.bufferingProgress = progress
                     }
                 }
             }
-        } else {
-            if loadingState.isFirst {
-                if videoOutput?.pixelBuffer == nil {
-                    videoOutput?.readNextFrame()
+            if duration == 0, playbackState == .playing, loadState == .playable {
+                if let rate = options.liveAdaptivePlaybackRate(loadingState: loadingState) {
+                    playbackRate = rate
                 }
-            }
-            var progress = 100
-            if loadingState.isPlayable {
-                loadState = .playable
-            } else {
-                if loadingState.progress.isInfinite {
-                    progress = 100
-                } else if loadingState.progress.isNaN {
-                    progress = 0
-                } else {
-                    progress = min(100, Int(loadingState.progress))
-                }
-            }
-            if playbackState == .playing {
-                runOnMainThread { [weak self] in
-                    // 在主线程更新进度
-                    self?.bufferingProgress = progress
-                }
-            }
-        }
-        if duration == 0, playbackState == .playing, loadState == .playable {
-            if let rate = options.liveAdaptivePlaybackRate(loadingState: loadingState) {
-                playbackRate = rate
             }
         }
     }
 
-    func sourceDidChange(oldBitRate: Int64, newBitrate: Int64) {
-        KSLog("oldBitRate \(oldBitRate) change to newBitrate \(newBitrate)")
+    func sourceDidChange(source: MEPlayerItem, oldBitRate: Int64, newBitrate: Int64) {
+        let generation = sessionGeneration
+        runOnMainThread { [weak self] in
+            guard let self, self.sessionActive, generation == self.sessionGeneration, source === self.playerItem else { return }
+            KSLog("oldBitRate \(oldBitRate) change to newBitrate \(newBitrate)")
+
+        }
     }
 }
 
@@ -333,11 +399,23 @@ extension KSMEPlayer: MediaPlayerProtocol {
             videoOutput?.displayLayerDelegate = self
         }
         self.options = options
+        userHardwareDecode = options.hardwareDecode
+        userAsyncDecode = options.asynchronousDecompression
+        userStartPlayTime = options.startPlayTime
+        userForwardBufferDuration = options.preferredForwardBufferDuration
+        userMaxBufferDuration = options.maxBufferDuration
+        sessionActive = true
+        deliveredReady = false
+        deliveredFailure = false
+        recovery = PlaybackRecovery()
+        savedTrackIDs = nil
+        savedRecoveryTime = nil
         playerItem.delegate = self
         audioOutput.flush()
         audioOutput.renderSource = playerItem
         videoOutput?.renderSource = playerItem
         videoOutput?.options = options
+        connectSubtitleRenderer()
     }
 
     public var currentPlaybackTime: TimeInterval {
@@ -357,17 +435,33 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public var fileSize: Double { playerItem.fileSize }
 
-    public var seekable: Bool { playerItem.seekable }
+    public var seekable: Bool { sessionActive && isReadyToPlay && playerItem.seekable }
+    public var isLive: Bool { playerItem.isLive }
+    public var runtimeInfo: [String: String] {
+        let output = videoOutput as? MetalPlayView
+        let track = tracks(mediaType: .video).first { $0.isEnabled } as? FFmpegAssetTrack
+        return ["ffmpegVersion": String(cString: av_version_info()),
+                "decoder": track?.actualDecoder ?? "unknown",
+                "displayBackend": output?.actualRenderingBackend ?? "none",
+                "inputDynamicRange": output?.inputDynamicRange ?? "unknown",
+                "outputDynamicRange": output?.outputDynamicRange ?? "unknown",
+                "dolbyProfile": (output?.doviProfile ?? track?.dovi.map { Int($0.dv_profile) }).map(String.init) ?? "none",
+                "isLive": String(isLive), "seekable": String(seekable)]
+    }
 
     public var dynamicInfo: DynamicInfo? {
         playerItem.dynamicInfo
     }
 
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
+        guard seekable, sessionActive, recoveryWork == nil else { completion(false); return }
+        let generation = sessionGeneration
+        (videoOutput as? MetalPlayView)?.clearSubtitles()
         let time = max(time, 0)
         playbackState = .seeking
         runOnMainThread { [weak self] in
-            self?.bufferingProgress = 0
+            guard let self, self.sessionGeneration == generation, self.sessionActive else { return }
+            self.bufferingProgress = 0
         }
         let seekTime: TimeInterval
         if time >= duration, options.isLoopPlay {
@@ -376,11 +470,11 @@ extension KSMEPlayer: MediaPlayerProtocol {
             seekTime = time
         }
         playerItem.seek(time: seekTime) { [weak self] result in
-            guard let self else { return }
+            guard let self, generation == self.sessionGeneration, self.sessionActive else { completion(false); return }
             if result {
                 self.audioOutput.flush()
                 runOnMainThread { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.sessionGeneration == generation, self.sessionActive else { return }
                     if let controlTimebase = self.videoOutput?.displayLayer.controlTimebase {
                         CMTimebaseSetTime(controlTimebase, time: CMTimeMake(value: Int64(self.currentPlaybackTime), timescale: 1))
                     }
@@ -392,6 +486,16 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public func prepareToPlay() {
         KSLog("prepareToPlay \(self)")
+        if !sessionActive {
+            sessionActive = true
+            deliveredReady = false
+            deliveredFailure = false
+            recovery = PlaybackRecovery()
+            playerItem = MEPlayerItem(url: sourceURL, options: options)
+            playerItem.delegate = self
+            audioOutput.renderSource = playerItem
+            videoOutput?.renderSource = playerItem
+        }
         options.prepareTime = CACurrentMediaTime()
         playerItem.prepareToPlay()
         bufferingProgress = 0
@@ -414,6 +518,19 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func shutdown() {
+        sessionGeneration &+= 1
+        sessionActive = false
+        recoveryWork?.cancel()
+        recoveryWork = nil
+        savedTrackIDs = nil
+        savedRecoveryTime = nil
+        playerItem.delegate = nil
+        (videoOutput as? MetalPlayView)?.clearSubtitles()
+        options.hardwareDecode = userHardwareDecode
+        options.asynchronousDecompression = userAsyncDecode
+        options.startPlayTime = userStartPlayTime
+        options.preferredForwardBufferDuration = userForwardBufferDuration
+        options.maxBufferDuration = userMaxBufferDuration
         KSLog("shutdown \(self)")
         playbackState = .stopped
         loadState = .idle
@@ -447,7 +564,8 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func thumbnailImageAtCurrentTime() async -> CGImage? {
-        videoOutput?.pixelBuffer?.cgImage()
+        guard !isLive, (videoOutput as? MetalPlayView)?.requiresMetal != true else { return nil }
+        return videoOutput?.pixelBuffer?.cgImage()
     }
 
     public func generatePreviewThumbnails() async throws -> [KSPlayerPreviewFrame] {
@@ -455,12 +573,16 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func generatePreviewThumbnails(onUpdate: @escaping ([KSPlayerPreviewFrame]) -> Void) async throws -> [KSPlayerPreviewFrame] {
+        guard seekable, !isLive else { return [] }
+        let generation = sessionGeneration
         try Task.checkCancellation()
         let thumbnails = try await ThumbnailController().generateThumbnail(for: sourceURL, onUpdate: { [weak self] thumbnails in
-            let frames = self?.previewFrames(from: thumbnails) ?? []
-            self?.setPreviewFrames(frames)
+            guard let self, self.sessionActive, self.sessionGeneration == generation else { return }
+            let frames = self.previewFrames(from: thumbnails)
+            self.setPreviewFrames(frames)
             onUpdate(frames)
         })
+        guard sessionActive, sessionGeneration == generation else { throw CancellationError() }
         let frames = previewFrames(from: thumbnails)
         setPreviewFrames(frames)
         onUpdate(frames)
@@ -474,7 +596,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func previewImage(at time: TimeInterval) async -> CGImage? {
-        guard time.isFinite, time >= 0 else { return nil }
+        guard seekable, !isLive, time.isFinite, time >= 0 else { return nil }
         if let frame = previewFramesSnapshot().min(by: { abs($0.time - time) < abs($1.time - time) }) {
             return frame.image
         }
@@ -510,7 +632,8 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func tracks(mediaType: AVFoundation.AVMediaType) -> [MediaPlayerTrack] {
-        playerItem.assetTracks.compactMap { track -> MediaPlayerTrack? in
+        guard sessionActive, isReadyToPlay else { return [] }
+        return playerItem.assetTracks.compactMap { track -> MediaPlayerTrack? in
             if track.mediaType == mediaType {
                 return track
             } else if mediaType == .subtitle {
@@ -521,6 +644,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func select(track: some MediaPlayerTrack) {
+        if track.mediaType == .subtitle { (videoOutput as? MetalPlayView)?.clearSubtitles() }
         let isSeek = playerItem.select(track: track)
         if isSeek {
             audioOutput.flush()
@@ -624,6 +748,15 @@ extension KSMEPlayer: AVPlaybackCoordinatorPlaybackControlDelegate {
 }
 
 extension KSMEPlayer: DisplayLayerDelegate {
+    public func renderingBackendDidChange() {
+        if (videoOutput as? MetalPlayView)?.requiresMetal == true {
+            if #available(iOS 15.0, tvOS 15.0, macOS 12.0, *) {
+                (_pipController as? KSPictureInPictureController)?.stopPictureInPicture()
+            }
+        }
+        delegate?.changeLoadState(player: self)
+    }
+
     public func change(displayLayer: AVSampleBufferDisplayLayer) {
         if #available(iOS 15.0, tvOS 15.0, macOS 12.0, *) {
             let contentSource = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: displayLayer, playbackDelegate: self)
@@ -641,5 +774,81 @@ public extension KSMEPlayer {
 
     func stoptRecord() {
         playerItem.stopRecord()
+    }
+}
+
+private extension KSMEPlayer {
+    func finishFailure(_ error: NSError?) {
+        deliveredFailure = true
+        sessionActive = false
+        sessionGeneration &+= 1
+        isReadyToPlay = false
+        playerItem.delegate = nil
+        playerItem.shutdown()
+        playbackState = .stopped
+        loadState = .idle
+        delegate?.finish(player: self, error: error)
+    }
+
+    func connectSubtitleRenderer() {
+        (videoOutput as? MetalPlayView)?.imageSubtitleProvider = { [weak self] in
+            guard let self, self.sessionActive, self.isReadyToPlay else { return [] }
+            return self.tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }
+                .filter { $0.isEnabled && $0.isImageSubtitle }
+                .flatMap { $0.search(for: self.displayedVideoTime - $0.delay) }
+        }
+    }
+
+    func recover(error: NSError) -> Bool {
+        let hardware = options.hardwareDecode && (error.code == KSPlayerErrorCode.codesContextOpen.rawValue ||
+            tracks(mediaType: .video).contains { ($0 as? FFmpegAssetTrack)?.actualDecoder?.hasPrefix("VideoToolbox") == true })
+        guard let action = recovery.next(error: error, streaming: KSOptions.isStreamingURL(sourceURL),
+                                         hardware: hardware)
+        else { return false }
+        if savedTrackIDs == nil, isReadyToPlay {
+            savedTrackIDs = Dictionary(uniqueKeysWithValues: [AVMediaType.video, .audio, .subtitle].map { type in
+                (type, Set(tracks(mediaType: type).filter { $0.isEnabled }.map(\.trackID)))
+            })
+            savedRecoveryTime = seekable ? currentPlaybackTime : 0
+        }
+        if savedRecoveryTime == nil { savedRecoveryTime = options.startPlayTime }
+        if action == .softwareDecode {
+            options.hardwareDecode = false
+            options.asynchronousDecompression = false
+        }
+        let delay: TimeInterval
+        if case let .reconnect(seconds) = action { delay = seconds } else { delay = 0 }
+        sessionGeneration &+= 1
+        let generation = sessionGeneration
+        playerItem.delegate = nil
+        playerItem.shutdown()
+        isReadyToPlay = false
+        loadState = .loading
+        audioOutput.flush()
+        videoOutput?.flush()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.sessionActive, self.sessionGeneration == generation else { return }
+            self.recoveryWork = nil
+            self.options.startPlayTime = self.savedRecoveryTime ?? 0
+            self.playerItem = MEPlayerItem(url: self.sourceURL, options: self.options)
+            self.playerItem.restoredTrackIDs = self.savedTrackIDs ?? [:]
+            self.playerItem.delegate = self
+            self.audioOutput.renderSource = self.playerItem
+            self.videoOutput?.renderSource = self.playerItem
+            self.playerItem.prepareToPlay()
+        }
+        recoveryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        return true
+    }
+
+}
+
+public extension KSMEPlayer {
+    /// nil disables embedded subtitles. Existing text consumers use subtitleDataSouce.
+    func setSubtitleTrack(_ track: (any MediaPlayerTrack)?) {
+        tracks(mediaType: .subtitle).forEach { $0.isEnabled = false }
+        if let track { select(track: track) }
+        (videoOutput as? MetalPlayView)?.clearSubtitles()
     }
 }

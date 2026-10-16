@@ -63,6 +63,7 @@ class VideoToolboxDecode: DecodeProtocol {
                     return
                 }
                 let frame = VideoVTBFrame(fps: session.assetTrack.nominalFrameRate, isDovi: session.assetTrack.dovi != nil)
+                frame.doviProfile = session.assetTrack.dovi.map { Int($0.dv_profile) }
                 frame.corePixelBuffer = imageBuffer
                 frame.timebase = session.assetTrack.timebase
                 if packet.isKeyFrame, packetFlags & AV_PKT_FLAG_DISCARD != 0, self.lastPosition > 0 {

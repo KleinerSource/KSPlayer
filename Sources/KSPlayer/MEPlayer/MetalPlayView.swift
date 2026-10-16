@@ -13,6 +13,11 @@ import MetalKit
 #endif
 public protocol DisplayLayerDelegate: NSObjectProtocol {
     func change(displayLayer: AVSampleBufferDisplayLayer)
+    func renderingBackendDidChange()
+}
+
+public extension DisplayLayerDelegate {
+    func renderingBackendDidChange() {}
 }
 
 public protocol VideoOutput: FrameOutput {
@@ -54,6 +59,12 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     public private(set) var pixelBuffer: PixelBufferProtocol?
+    public private(set) var actualRenderingBackend = "sampleBuffer"
+    public private(set) var inputDynamicRange = "sdr"
+    public private(set) var outputDynamicRange = "sdr"
+    public private(set) var doviProfile: Int?
+    public private(set) var requiresMetal = false
+    public var supportsPictureInPicture: Bool { pixelBuffer != nil && !requiresMetal }
     /// 用displayLink会导致锁屏无法draw，
     /// 用DispatchSourceTimer的话，在播放4k视频的时候repeat的时间会变长,
     /// 用MTKView的draw(in:)也是不行，会卡顿
@@ -69,12 +80,23 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     private let metalView = MetalView()
+    var imageSubtitleProvider: (() -> [SubtitlePart])?
+    private let subtitleLayer = CALayer()
+    private var subtitleTimer: Timer?
     public weak var displayLayerDelegate: DisplayLayerDelegate?
     public init(options: KSOptions) {
         self.options = options
         super.init(frame: .zero)
         addSubview(displayView)
         addSubview(metalView)
+        #if os(macOS)
+        subtitleLayer.isGeometryFlipped = true
+        #endif
+        subtitleLayer.masksToBounds = true
+        backingLayer?.addSublayer(subtitleLayer)
+        subtitleTimer = .scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.updateImageSubtitles()
+        }
         metalView.isHidden = true
         //        displayLink = CADisplayLink(block: renderFrame)
         displayLink = CADisplayLink(target: self, selector: #selector(renderFrame))
@@ -142,7 +164,11 @@ public final class MetalPlayView: UIView, VideoOutput {
     #endif
 
     public func flush() {
+        clearSubtitles()
         pixelBuffer = nil
+        doviProfile = nil
+        inputDynamicRange = "sdr"
+        outputDynamicRange = "sdr"
         if displayView.isHidden {
             metalView.clear()
         } else {
@@ -152,6 +178,58 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     public func invalidate() {
         displayLink.invalidate()
+        subtitleTimer?.invalidate()
+        subtitleTimer = nil
+        clearSubtitles()
+    }
+
+    func clearSubtitles() {
+        subtitleLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        displayedSubtitleIDs = []
+        subtitleBounds = .zero
+    }
+
+    private var displayedSubtitleIDs: [ObjectIdentifier] = []
+    private var subtitleBounds = CGRect.zero
+    private func updateImageSubtitles() {
+        let parts = imageSubtitleProvider?().filter { $0.image != nil } ?? []
+        let ids = parts.map(ObjectIdentifier.init)
+        guard ids != displayedSubtitleIDs || subtitleBounds != bounds else { return }
+        clearSubtitles()
+        displayedSubtitleIDs = ids
+        subtitleBounds = bounds
+        guard let size = pixelBuffer?.size, size.width > 0, size.height > 0 else { return }
+        let aspectSize = CGSize(width: size.width, height: size.height * (pixelBuffer?.aspectRatio.height ?? 1) / max(pixelBuffer?.aspectRatio.width ?? 1, 0.001))
+        let rect: CGRect
+        if contentMode == .scaleToFill {
+            rect = bounds
+        } else if contentMode == .scaleAspectFill {
+            let scale = max(bounds.width / aspectSize.width, bounds.height / aspectSize.height)
+            rect = CGRect(x: (bounds.width - aspectSize.width * scale) / 2,
+                          y: (bounds.height - aspectSize.height * scale) / 2,
+                          width: aspectSize.width * scale, height: aspectSize.height * scale)
+        } else {
+            rect = AVMakeRect(aspectRatio: aspectSize, insideRect: bounds)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        subtitleLayer.frame = bounds
+        for part in parts {
+            #if canImport(UIKit)
+            let image = part.image?.cgImage
+            #else
+            let image = part.image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            #endif
+            guard let image else { continue }
+            let layer = CALayer()
+            layer.contents = image
+            layer.frame = CGRect(x: rect.minX + part.origin.x * rect.width / size.width,
+                                 y: rect.minY + part.origin.y * rect.height / size.height,
+                                 width: CGFloat(image.width) * rect.width / size.width,
+                                 height: CGFloat(image.height) * rect.height / size.height)
+            subtitleLayer.addSublayer(layer)
+        }
+        CATransaction.commit()
     }
 
     public func readNextFrame() {
@@ -177,12 +255,25 @@ extension MetalPlayView {
             guard let pixelBuffer else {
                 return
             }
-            isDovi = frame.isDovi
+            isDovi = frame.isDovi || frame.doviProfile != nil
+            doviProfile = frame.doviProfile
+            let isPQ = pixelBuffer.transferFunction == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ
+            let isHLG = pixelBuffer.transferFunction == kCVImageBufferTransferFunction_ITU_R_2100_HLG
+            let customDovi = frame.doviMetadata != nil
+            let inputHDR = isPQ || isHLG || customDovi
+            let hdrOutput = inputHDR && options.destinationDynamicRange != .sdr && screenSupportsHDR
+            let processColor = customDovi || (inputHDR && !hdrOutput)
+            let previousBackend = requiresMetal
+            requiresMetal = processColor || !options.isUseDisplayLayer() || pixelBuffer.cvPixelBuffer == nil
+            if previousBackend != requiresMetal { displayLayerDelegate?.renderingBackendDidChange() }
+            inputDynamicRange = frame.doviProfile != nil ? "dolbyVision" : (isPQ ? "hdr10" : (isHLG ? "hlg" : "sdr"))
+            outputDynamicRange = hdrOutput ? (customDovi || isPQ ? "hdr10" : "hlg") : "sdr"
+            actualRenderingBackend = requiresMetal ? "metal" : "sampleBuffer"
             fps = frame.fps
             let cmtime = frame.cmtime
             let par = pixelBuffer.size
             let sar = pixelBuffer.aspectRatio
-            if let pixelBuffer = pixelBuffer.cvPixelBuffer, options.isUseDisplayLayer() {
+            if let pixelBuffer = pixelBuffer.cvPixelBuffer, !requiresMetal {
                 if displayView.isHidden {
                     displayView.isHidden = false
                     metalView.isHidden = true
@@ -210,22 +301,34 @@ extension MetalPlayView {
                     size = KSOptions.sceneSize
                 }
                 checkFormatDescription(pixelBuffer: pixelBuffer)
-                #if !os(tvOS)
-                if #available(iOS 16, *) {
-                    metalView.metalLayer.edrMetadata = frame.edrMetadata
-                }
-                #endif
-                metalView.draw(pixelBuffer: pixelBuffer, display: options.display, size: size)
+                metalView.draw(frame: frame, pixelBuffer: pixelBuffer, display: options.display, size: size,
+                               processColor: processColor, hdrOutput: hdrOutput)
             }
             renderSource?.setVideo(time: cmtime, position: frame.position)
         }
     }
 
+    private var screenSupportsHDR: Bool {
+        #if os(macOS)
+        return (window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1) > 1
+        #elseif os(iOS) || os(tvOS)
+        if #available(iOS 16.0, tvOS 16.0, *) {
+            return (window?.screen ?? UIScreen.main).potentialEDRHeadroom > 1
+        }
+        return false
+        #else
+        return false
+        #endif
+    }
+
     private func checkFormatDescription(pixelBuffer: PixelBufferProtocol) {
         if formatDescription == nil || !pixelBuffer.matche(formatDescription: formatDescription!) {
+            clearSubtitles()
             if formatDescription != nil {
+                let hidden = displayView.isHidden
                 displayView.removeFromSuperview()
                 displayView = AVSampleBufferDisplayView()
+                displayView.isHidden = hidden
                 displayView.frame = frame
                 addSubview(displayView)
             }
@@ -271,33 +374,32 @@ class MetalView: UIView {
         }
     }
 
-    func draw(pixelBuffer: PixelBufferProtocol, display: DisplayEnum, size: CGSize) {
+    func draw(frame: VideoVTBFrame, pixelBuffer: PixelBufferProtocol, display: DisplayEnum, size: CGSize,
+              processColor: Bool, hdrOutput: Bool) {
         metalLayer.drawableSize = size
-        metalLayer.pixelFormat = KSOptions.colorPixelFormat(bitDepth: pixelBuffer.bitDepth)
-        let colorspace = pixelBuffer.colorspace
+        metalLayer.pixelFormat = processColor ? (hdrOutput ? .bgr10a2Unorm : .bgra8Unorm) : KSOptions.colorPixelFormat(bitDepth: pixelBuffer.bitDepth)
+        let colorspace: CGColorSpace?
+        if processColor {
+            colorspace = CGColorSpace(name: hdrOutput ? CGColorSpace.itur_2020_PQ : CGColorSpace.sRGB)
+        } else { colorspace = pixelBuffer.colorspace }
         if colorspace != nil, metalLayer.colorspace != colorspace {
             metalLayer.colorspace = colorspace
             KSLog("[video] CAMetalLayer colorspace \(String(describing: colorspace))")
-            #if !os(tvOS)
-            if #available(iOS 16.0, *) {
-                if let name = colorspace?.name, name != CGColorSpace.sRGB {
-                    #if os(macOS)
-                    metalLayer.wantsExtendedDynamicRangeContent = window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0 > 1.0
-                    #else
-                    metalLayer.wantsExtendedDynamicRangeContent = true
-                    #endif
-                } else {
-                    metalLayer.wantsExtendedDynamicRangeContent = false
-                }
-                KSLog("[video] CAMetalLayer wantsExtendedDynamicRangeContent \(metalLayer.wantsExtendedDynamicRangeContent)")
-            }
-            #endif
         }
+        #if !os(tvOS)
+        if #available(iOS 16, *) {
+            metalLayer.wantsExtendedDynamicRangeContent = hdrOutput
+            // SDR has already been mapped by BT.2390. HDR output remains PQ
+            // and is mapped to the actual panel once by Core Animation.
+            metalLayer.edrMetadata = hdrOutput ? frame.edrMetadata : nil
+        }
+        #endif
         guard let drawable = metalLayer.nextDrawable() else {
             KSLog("[video] CAMetalLayer not readyForMoreMediaData")
             return
         }
-        render.draw(pixelBuffer: pixelBuffer, display: display, drawable: drawable)
+        render.draw(pixelBuffer: pixelBuffer, display: display, drawable: drawable,
+                    colorFrame: processColor ? frame : nil, hdrOutput: hdrOutput)
     }
 }
 

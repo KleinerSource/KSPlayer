@@ -80,10 +80,7 @@ class SubtitleDecode: DecodeProtocol {
     func shutdown() {
         scale.shutdown()
         avsubtitle_free(&subtitle)
-        if let codecContext {
-            avcodec_close(codecContext)
-            avcodec_free_context(&self.codecContext)
-        }
+        avcodec_free_context(&codecContext)
     }
 
     private func text(subtitle: AVSubtitle) -> [SubtitlePart] {

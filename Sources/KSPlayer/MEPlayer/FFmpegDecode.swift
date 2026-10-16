@@ -13,6 +13,7 @@ class FFmpegDecode: DecodeProtocol {
     private let options: KSOptions
     private var coreFrame: UnsafeMutablePointer<AVFrame>? = av_frame_alloc()
     private var codecContext: UnsafeMutablePointer<AVCodecContext>?
+    private var initializationError: Error?
     private var bestEffortTimestamp = Int64(0)
     private let frameChange: FrameChange
     private let filter: MEFilter
@@ -23,6 +24,7 @@ class FFmpegDecode: DecodeProtocol {
         do {
             codecContext = try assetTrack.createContext(options: options)
         } catch {
+            initializationError = error
             KSLog(error as CustomStringConvertible)
         }
         codecContext?.pointee.time_base = assetTrack.timebase.rational
@@ -35,7 +37,15 @@ class FFmpegDecode: DecodeProtocol {
     }
 
     func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
-        guard let codecContext, avcodec_send_packet(codecContext, packet.corePacket) == 0 else {
+        guard let codecContext else {
+            completionHandler(.failure(initializationError ?? NSError(errorCode: .codecContextCreate)))
+            return
+        }
+        let sendResult = avcodec_send_packet(codecContext, packet.corePacket)
+        updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
+        var retryPacket = sendResult == AVError.tryAgain.code
+        if sendResult < 0, !retryPacket, sendResult != AVError.eof.code {
+            completionHandler(.failure(NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: sendResult)))
             return
         }
 
@@ -59,10 +69,20 @@ class FFmpegDecode: DecodeProtocol {
 
         while true {
             let result = avcodec_receive_frame(codecContext, coreFrame)
+            // Format negotiation can first happen inside receive_frame. Record
+            // the selected backend even when that first hardware frame fails.
+            updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
             if result == 0, let inputFrame = coreFrame {
-                var displayData: MasteringDisplayMetadata?
-                var contentData: ContentLightMetadata?
-                var ambientViewingEnvironment: AmbientViewingEnvironment?
+                if packet.assetTrack.mediaType == .video {
+                    if inputFrame.pointee.format == AV_PIX_FMT_VIDEOTOOLBOX.rawValue {
+                        packet.assetTrack.actualDecoder = "VideoToolbox (FFmpeg)"
+                    } else if let name = codecContext.pointee.codec?.pointee.name {
+                        packet.assetTrack.actualDecoder = String(cString: name)
+                    }
+                }
+                let profile = packet.assetTrack.dovi.map { Int($0.dv_profile) }
+                let inputMetadata = packet.assetTrack.mediaType == .video ? VideoDisplayMetadata(frame: inputFrame, profile: profile) : nil
+                let inputPTS = inputFrame.pointee.pts
 
                 // filter之后，side_data信息会丢失，所以放在这里
                 if inputFrame.pointee.nb_side_data > 0 {
@@ -94,45 +114,6 @@ class FFmpegDecode: DecodeProtocol {
                                     let str = String(cString: sideData.data.advanced(by: Int(AV_UUID_LEN)))
                                     options.sei(string: str)
                                 }
-                            } else if sideData.type == AV_FRAME_DATA_DOVI_RPU_BUFFER {
-                                let data = sideData.data.withMemoryRebound(to: [UInt8].self, capacity: 1) { $0 }
-                            } else if sideData.type == AV_FRAME_DATA_DOVI_METADATA { // AVDOVIMetadata
-                                let data = sideData.data.withMemoryRebound(to: AVDOVIMetadata.self, capacity: 1) { $0 }
-                                let header = av_dovi_get_header(data)
-                                let mapping = av_dovi_get_mapping(data)
-                                let color = av_dovi_get_color(data)
-                                // frame.corePixelBuffer?.transferFunction = kCVImageBufferTransferFunction_ITU_R_2020
-                            } else if sideData.type == AV_FRAME_DATA_DYNAMIC_HDR_PLUS { // AVDynamicHDRPlus
-                                let data = sideData.data.withMemoryRebound(to: AVDynamicHDRPlus.self, capacity: 1) { $0 }.pointee
-                            } else if sideData.type == AV_FRAME_DATA_DYNAMIC_HDR_VIVID { // AVDynamicHDRVivid
-                                let data = sideData.data.withMemoryRebound(to: AVDynamicHDRVivid.self, capacity: 1) { $0 }.pointee
-                            } else if sideData.type == AV_FRAME_DATA_MASTERING_DISPLAY_METADATA {
-                                let data = sideData.data.withMemoryRebound(to: AVMasteringDisplayMetadata.self, capacity: 1) { $0 }.pointee
-                                displayData = MasteringDisplayMetadata(
-                                    display_primaries_r_x: UInt16(truncatingIfNeeded: data.display_primaries.0.0.num).bigEndian,
-                                    display_primaries_r_y: UInt16(truncatingIfNeeded: data.display_primaries.0.1.num).bigEndian,
-                                    display_primaries_g_x: UInt16(truncatingIfNeeded: data.display_primaries.1.0.num).bigEndian,
-                                    display_primaries_g_y: UInt16(truncatingIfNeeded: data.display_primaries.1.1.num).bigEndian,
-                                    display_primaries_b_x: UInt16(truncatingIfNeeded: data.display_primaries.2.0.num).bigEndian,
-                                    display_primaries_b_y: UInt16(truncatingIfNeeded: data.display_primaries.2.1.num).bigEndian,
-                                    white_point_x: UInt16(truncatingIfNeeded: data.white_point.0.num).bigEndian,
-                                    white_point_y: UInt16(truncatingIfNeeded: data.white_point.1.num).bigEndian,
-                                    minLuminance: UInt32(truncatingIfNeeded: data.min_luminance.num).bigEndian,
-                                    maxLuminance: UInt32(truncatingIfNeeded: data.max_luminance.num).bigEndian
-                                )
-                            } else if sideData.type == AV_FRAME_DATA_CONTENT_LIGHT_LEVEL {
-                                let data = sideData.data.withMemoryRebound(to: AVContentLightMetadata.self, capacity: 1) { $0 }.pointee
-                                contentData = ContentLightMetadata(
-                                    MaxCLL: UInt16(truncatingIfNeeded: data.MaxCLL).bigEndian,
-                                    MaxFALL: UInt16(truncatingIfNeeded: data.MaxFALL).bigEndian
-                                )
-                            } else if sideData.type == AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT {
-                                let data = sideData.data.withMemoryRebound(to: AVAmbientViewingEnvironment.self, capacity: 1) { $0 }.pointee
-                                ambientViewingEnvironment = AmbientViewingEnvironment(
-                                    ambient_illuminance: UInt32(truncatingIfNeeded: data.ambient_illuminance.num).bigEndian,
-                                    ambient_light_x: UInt16(truncatingIfNeeded: data.ambient_light_x.num).bigEndian,
-                                    ambient_light_y: UInt16(truncatingIfNeeded: data.ambient_light_y.num).bigEndian
-                                )
                             }
                         }
                     }
@@ -142,11 +123,36 @@ class FFmpegDecode: DecodeProtocol {
                     do {
                         var frame = try frameChange.change(avframe: avframe)
                         if let videoFrame = frame as? VideoVTBFrame, let pixelBuffer = videoFrame.corePixelBuffer {
+                            // Use the filter's output AVFrame, not the most recent
+                            // input frame: buffering filters may return older PTS.
+                            let metadata = (avframe.pointee.pts == inputPTS ? inputMetadata : nil) ?? VideoDisplayMetadata(frame: avframe, profile: profile)
+                            videoFrame.doviMetadata = metadata.dovi
+                            videoFrame.doviProfile = profile ?? metadata.dovi?.profile
+                            videoFrame.rpuData = metadata.rpu
+                            videoFrame.edrMetaData = metadata.edr
+                            videoFrame.contentPeakNits = metadata.peakNits
+                            if videoFrame.doviProfile == 5, metadata.dovi == nil {
+                                throw NSError(errorCode: .codecVideoReceiveFrame, userInfo: [NSLocalizedDescriptionKey: "Dolby Vision Profile 5 frame has no usable RPU metadata"])
+                            }
+                            pixelBuffer.yCbCrMatrix = avframe.pointee.colorspace.ycbcrMatrix ?? packet.assetTrack.codecpar.color_space.ycbcrMatrix
+                            pixelBuffer.colorPrimaries = avframe.pointee.color_primaries.colorPrimaries ?? packet.assetTrack.codecpar.color_primaries.colorPrimaries
+                            pixelBuffer.transferFunction = avframe.pointee.color_trc.transferFunction ?? packet.assetTrack.codecpar.color_trc.transferFunction
+                            pixelBuffer.colorspace = KSOptions.colorSpace(ycbcrMatrix: pixelBuffer.yCbCrMatrix, transferFunction: pixelBuffer.transferFunction)
+                            if let cv = pixelBuffer.cvPixelBuffer {
+                                let fullRange = avframe.pointee.color_range == AVCOL_RANGE_JPEG ||
+                                    (avframe.pointee.color_range == AVCOL_RANGE_UNSPECIFIED && packet.assetTrack.codecpar.color_range == AVCOL_RANGE_JPEG)
+                                CVBufferSetAttachment(cv, kCMFormatDescriptionExtension_FullRangeVideo, NSNumber(value: fullRange), .shouldPropagate)
+                                if var displayData = metadata.edr.displayData {
+                                    let data = Data(bytes: &displayData, count: MemoryLayout<MasteringDisplayMetadata>.size)
+                                    CVBufferSetAttachment(cv, kCVImageBufferMasteringDisplayColorVolumeKey, data as CFData, .shouldPropagate)
+                                } else { CVBufferRemoveAttachment(cv, kCVImageBufferMasteringDisplayColorVolumeKey) }
+                                if var contentData = metadata.edr.contentData {
+                                    let data = Data(bytes: &contentData, count: MemoryLayout<ContentLightMetadata>.size)
+                                    CVBufferSetAttachment(cv, kCVImageBufferContentLightLevelInfoKey, data as CFData, .shouldPropagate)
+                                } else { CVBufferRemoveAttachment(cv, kCVImageBufferContentLightLevelInfoKey) }
+                            }
                             if let pixelBuffer = pixelBuffer as? PixelBuffer {
                                 pixelBuffer.formatDescription = packet.assetTrack.formatDescription
-                            }
-                            if displayData != nil || contentData != nil || ambientViewingEnvironment != nil {
-                                videoFrame.edrMetaData = EDRMetaData(displayData: displayData, contentData: contentData, ambientViewingEnvironment: ambientViewingEnvironment)
                             }
                         }
                         frame.timebase = filter.timebase
@@ -179,13 +185,35 @@ class FFmpegDecode: DecodeProtocol {
                     avcodec_flush_buffers(codecContext)
                     break
                 } else if result == AVError.tryAgain.code {
+                    if retryPacket {
+                        retryPacket = false
+                        let retryResult = avcodec_send_packet(codecContext, packet.corePacket)
+                        updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
+                        if retryResult == 0 { continue }
+                        if retryResult != AVError.tryAgain.code, retryResult != AVError.eof.code {
+                            completionHandler(.failure(NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: retryResult)))
+                        }
+                    }
                     break
                 } else {
                     let error = NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: result)
                     KSLog(error)
                     completionHandler(.failure(error))
+                    break
                 }
             }
+        }
+    }
+
+    private func updateDecoder(assetTrack: FFmpegAssetTrack, context: UnsafeMutablePointer<AVCodecContext>) {
+        guard assetTrack.mediaType == .video else { return }
+        if context.pointee.pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX || context.pointee.hw_device_ctx != nil {
+            // This fork only installs a VideoToolbox hardware-device context.
+            // Do not infer hardware use from the user's preference: negotiation
+            // may select a software format, or fail before producing any frame.
+            assetTrack.actualDecoder = "VideoToolbox (FFmpeg)"
+        } else if let name = context.pointee.codec?.pointee.name {
+            assetTrack.actualDecoder = String(cString: name)
         }
     }
 

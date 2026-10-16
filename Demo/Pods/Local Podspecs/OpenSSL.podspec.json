@@ -3,13 +3,13 @@
   "version": "3.1.4",
   "summary": "OpenSSL",
   "description": "OpenSSL",
-  "homepage": "https://github.com/kingslay/FFmpegKit",
+  "homepage": "https://github.com/KleinerSource/FFmpegKit",
   "authors": {
     "kintan": "554398854@qq.com"
   },
   "license": "MIT",
   "source": {
-    "git": "https://github.com/kingslay/FFmpegKit.git",
+    "git": "https://github.com/KleinerSource/FFmpegKit.git",
     "tag": "3.1.4"
   },
   "platforms": {
