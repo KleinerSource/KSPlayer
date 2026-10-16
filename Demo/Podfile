@@ -7,9 +7,9 @@ def common
   pod 'Libass', :path => '../FFmpegKit'
   pod 'OpenSSL', :path => '../FFmpegKit'
   pod 'FFmpegKit', :path => '../FFmpegKit'
-#  pod 'Libass',:git => 'https://github.com/kingslay/FFmpegKit.git', :branch => 'main'
-#  pod 'FFmpegKit',:git => 'https://github.com/kingslay/FFmpegKit.git', :branch => 'main'
-#  pod 'OpenSSL',:git => 'https://github.com/kingslay/FFmpegKit.git', :branch => 'main'
+#  pod 'Libass',:git => 'https://github.com/KleinerSource/FFmpegKit.git', :branch => 'senplayer-ffmpeg81'
+#  pod 'FFmpegKit',:git => 'https://github.com/KleinerSource/FFmpegKit.git', :branch => 'senplayer-ffmpeg81'
+#  pod 'OpenSSL',:git => 'https://github.com/KleinerSource/FFmpegKit.git', :branch => 'senplayer-ffmpeg81'
 end
 target 'demo-iOS' do
   project 'demo-iOS/demo-iOS.xcodeproj'
