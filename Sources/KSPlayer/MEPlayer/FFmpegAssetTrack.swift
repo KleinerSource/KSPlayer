@@ -162,6 +162,35 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         return max(Float(sampleRate / effectiveFrameSize), 48)
     }
 
+    static func doviConfiguration(
+        codedSideData: UnsafeMutablePointer<AVPacketSideData>?,
+        count: Int32
+    ) -> DOVIDecoderConfigurationRecord? {
+        guard count > 0, count <= 256, let codedSideData else {
+            return nil
+        }
+        let address = UInt(bitPattern: UnsafeRawPointer(codedSideData))
+        guard address >= 0x1_0000,
+              address % UInt(MemoryLayout<AVPacketSideData>.alignment) == 0
+        else {
+            return nil
+        }
+        guard let side = av_packet_side_data_get(codedSideData, count, AV_PKT_DATA_DOVI_CONF)?.pointee,
+              side.size >= MemoryLayout<AVDOVIDecoderConfigurationRecord>.size,
+              let bytes = side.data
+        else {
+            return nil
+        }
+        let config = UnsafeRawPointer(bytes).loadUnaligned(as: AVDOVIDecoderConfigurationRecord.self)
+        return DOVIDecoderConfigurationRecord(dv_version_major: config.dv_version_major,
+                                              dv_version_minor: config.dv_version_minor,
+                                              dv_profile: config.dv_profile, dv_level: config.dv_level,
+                                              rpu_present_flag: config.rpu_present_flag,
+                                              el_present_flag: config.el_present_flag,
+                                              bl_present_flag: config.bl_present_flag,
+                                              dv_bl_signal_compatibility_id: config.dv_bl_signal_compatibility_id)
+    }
+
     init?(codecpar: AVCodecParameters) {
         self.codecpar = codecpar
         bitRate = codecpar.bit_rate
@@ -199,21 +228,10 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         } else if codecpar.codec_type == AVMEDIA_TYPE_VIDEO {
             audioDescriptor = nil
             mediaType = .video
-            // FFmpeg headers and libraries must use the same pinned 8.1 ABI.
-            // Query the public side-data API rather than assuming a Swift
-            // tuple/struct layout from the former FFmpeg 6 build.
-            if let side = av_packet_side_data_get(codecpar.coded_side_data, codecpar.nb_coded_side_data, AV_PKT_DATA_DOVI_CONF)?.pointee,
-               side.size >= MemoryLayout<AVDOVIDecoderConfigurationRecord>.size, let bytes = side.data
-            {
-                let config = UnsafeRawPointer(bytes).loadUnaligned(as: AVDOVIDecoderConfigurationRecord.self)
-                dovi = DOVIDecoderConfigurationRecord(dv_version_major: config.dv_version_major,
-                                                     dv_version_minor: config.dv_version_minor,
-                                                     dv_profile: config.dv_profile, dv_level: config.dv_level,
-                                                     rpu_present_flag: config.rpu_present_flag,
-                                                     el_present_flag: config.el_present_flag,
-                                                     bl_present_flag: config.bl_present_flag,
-                                                     dv_bl_signal_compatibility_id: config.dv_bl_signal_compatibility_id)
-            }
+            // Malformed or ABI-mismatched stream parameters can contain a
+            // non-null, unaligned side-data pointer. Never pass it to FFmpeg.
+            dovi = Self.doviConfiguration(codedSideData: codecpar.coded_side_data,
+                                          count: codecpar.nb_coded_side_data)
             let sar = codecpar.sample_aspect_ratio.size
             var extradataSize = Int32(0)
             var extradata = codecpar.extradata

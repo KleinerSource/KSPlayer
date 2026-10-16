@@ -9,6 +9,17 @@ import FFmpegKit
 import XCTest
 
 final class FFmpegAssetTrackTest: XCTestCase {
+    func testDoviSideDataRejectsInvalidPointerFromPlaybackCrash() {
+        let sideData = UnsafeMutablePointer<AVPacketSideData>(bitPattern: 0x1e5d35)
+        XCTAssertNil(FFmpegAssetTrack.doviConfiguration(codedSideData: sideData, count: 24))
+    }
+
+    func testDoviSideDataRejectsMissingOrUnreasonableMetadata() {
+        XCTAssertNil(FFmpegAssetTrack.doviConfiguration(codedSideData: nil, count: 24))
+        let sideData = UnsafeMutablePointer<AVPacketSideData>(bitPattern: 0x1e5d35)
+        XCTAssertNil(FFmpegAssetTrack.doviConfiguration(codedSideData: sideData, count: 257))
+    }
+
     /// `AVCodecParameters.frame_size == 0` (left at 0 by most audio demuxers —
     /// AAC/MP3/Opus/FLAC/Vorbis — until the first frame is decoded): the old
     /// inline arithmetic on `FFmpegAssetTrack.swift:100` derived a fallback
