@@ -14,7 +14,7 @@ If you have a commercial project that requires a custom player, or would like to
 - Email : kingslay@icloud.com
 
 ## License
-KSPlayer defaults to the GPL license (requires open-sourcing your own project code), and we hope everyone will consciously respect the licensing agreement of the KSPlayer project. Additionally, There is a paid version available under the LGPL license. You can check [this post](https://github.com/kingslay/KSPlayer/issues/731) for details on the licensing options or send me an email. If I don't reply to your email, feel free to @mention me in this post.
+KSPlayer defaults to the GPL license (requires open-sourcing your own project code), and we hope everyone will consciously respect the licensing agreement of the KSPlayer project. Additionally, There is a paid version available under the LGPL license. You can check [this post](https://github.com/KleinerSource/KSPlayer/issues/731) for details on the licensing options or send me an email. If I don't reply to your email, feel free to @mention me in this post.
 
 If due to commercial reasons, you prefer not to adhere to the GPL license  or the LGPL license, you can contact us. Through our authorization, you can obtain a more flexible licensing agreement.
 
@@ -114,7 +114,7 @@ pod install
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/kingslay/KSPlayer.git", .branch("main"))
+    .package(url: "https://github.com/KleinerSource/KSPlayer.git", .branch("senplayer-ffmpeg81"))
 ]
 ```
 
@@ -125,10 +125,10 @@ Make sure to use the latest version **cocoapods 1.10.1+**, which can be installe
 ```ruby
 target 'ProjectName' do
     use_frameworks!
-    pod 'KSPlayer',:git => 'https://github.com/kingslay/KSPlayer.git', :branch => 'main'
-    pod 'DisplayCriteria',:git => 'https://github.com/kingslay/KSPlayer.git', :branch => 'main'
-    pod 'FFmpegKit',:git => 'https://github.com/kingslay/FFmpegKit.git', :branch => 'main'
-    pod 'Libass',:git => 'https://github.com/kingslay/FFmpegKit.git', :branch => 'main'
+    pod 'KSPlayer',:git => 'https://github.com/KleinerSource/KSPlayer.git', :branch => 'senplayer-ffmpeg81'
+    pod 'DisplayCriteria',:git => 'https://github.com/KleinerSource/KSPlayer.git', :branch => 'senplayer-ffmpeg81'
+    pod 'FFmpegKit',:git => 'https://github.com/KleinerSource/FFmpegKit.git', :branch => 'senplayer-ffmpeg81'
+    pod 'Libass',:git => 'https://github.com/KleinerSource/FFmpegKit.git', :branch => 'senplayer-ffmpeg81'
 end
 ```
 
@@ -330,7 +330,7 @@ Any contributing and pull requests are warmly welcome. However, before you plan 
 Open-source projects cannot live long without your help. If you find KSPlayer to be useful, please consider supporting this
 project by becoming a sponsor.
 
-Become a sponsor through [GitHub Sponsors](https://github.com/sponsors/kingslay/). :heart:
+Become a sponsor through [GitHub Sponsors](https://github.com/sponsors/KleinerSource/). :heart:
 
 Your user icon or company logo shows up this with a link to your home page.
 |Name| App name | App Logo |

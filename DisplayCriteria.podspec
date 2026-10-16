@@ -7,10 +7,10 @@ Pod::Spec.new do |s|
     Video Player Using Swift, based on ffmpeg, support for the horizontal screen, vertical screen, the upper and lower slide to adjust the volume, the screen brightness, or so slide to adjust the playback progress.
     DESC
 
-    s.homepage         = 'https://github.com/kingslay/KSPlayer'
+    s.homepage         = 'https://github.com/KleinerSource/KSPlayer'
     s.authors = { 'kintan' => 'kingslay@icloud.com' }
     s.license          = 'MIT'
-    s.source           = { :git => 'https://github.com/kingslay/KSPlayer.git', :tag => s.version.to_s }
+    s.source           = { :git => 'https://github.com/KleinerSource/KSPlayer.git', :tag => s.version.to_s }
 
     s.ios.deployment_target = '13.0'
     s.osx.deployment_target = '10.15'
