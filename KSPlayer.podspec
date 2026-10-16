@@ -21,6 +21,7 @@ Pod::Spec.new do |s|
     s.subspec 'Subtitle' do |ss|
         ss.source_files = 'Sources/KSPlayer/Subtitle/*.{swift}'
         ss.frameworks = 'Foundation'
+        ss.dependency 'KSPlayer/Core'
     end
     s.subspec 'Metal' do |ss|
         ss.source_files = 'Sources/KSPlayer/Metal/*.{swift,metal}'
@@ -44,6 +45,7 @@ Pod::Spec.new do |s|
         ss.frameworks  = 'AudioToolbox', 'VideoToolbox'
         ss.dependency 'FFmpegKit', '8.1.0'
         ss.dependency 'KSPlayer/AVPlayer'
+        ss.dependency 'KSPlayer/Core'
         ss.dependency 'KSPlayer/Metal'
         ss.dependency 'KSPlayer/Subtitle'
     end

@@ -287,7 +287,7 @@ open class SubtitleModel: ObservableObject {
     public static var textBold = false
     public static var textItalic = false
     public static var textPosition = TextPosition()
-    public static var audioRecognizes = [any AudioRecognize]()
+    public static var audioRecognizes = [any SubtitleInfo]()
     private var subtitleDataSouces: [SubtitleDataSouce] = KSOptions.subtitleDataSouces
     @Published
     public private(set) var subtitleInfos = [any SubtitleInfo]()

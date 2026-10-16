@@ -994,7 +994,7 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
 
     public func getAudioOutputRender() -> AudioFrame? {
         if let frame = audioTrack?.getOutputRender(where: nil) {
-            SubtitleModel.audioRecognizes.first {
+            SubtitleModel.audioRecognizes.compactMap { $0 as? AudioRecognize }.first {
                 $0.isEnabled
             }?.append(frame: frame)
             return frame
