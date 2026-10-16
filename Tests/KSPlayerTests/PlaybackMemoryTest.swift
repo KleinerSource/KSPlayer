@@ -126,7 +126,14 @@ final class PlaybackMemoryTest: XCTestCase {
         let stream = try XCTUnwrap(context?.pointee.streams[0])
         let asset = try XCTUnwrap(FFmpegAssetTrack(stream: stream))
         let options = KSOptions()
-        let session = try XCTUnwrap(DecompressionSession(assetTrack: asset, options: options))
+        guard let session = DecompressionSession(assetTrack: asset, options: options) else {
+            #if targetEnvironment(simulator)
+            throw XCTSkip("The iOS Simulator has no VideoToolbox decoder for this fixture; run this test on a device")
+            #else
+            XCTFail("VideoToolbox could not create the fixture decoder")
+            return
+            #endif
+        }
         let decoder = VideoToolboxDecode(options: options, session: session)
         let entered = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
