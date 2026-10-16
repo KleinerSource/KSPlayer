@@ -119,11 +119,13 @@ extension CVPixelBuffer: PixelBufferProtocol {
 
     public var colorspace: CGColorSpace? {
         get {
+            if let colorSpace = CVBufferGetAttachment(self, kCVImageBufferCGColorSpaceKey, nil)?.takeUnretainedValue() {
+                return (colorSpace as! CGColorSpace)
+            }
             #if os(macOS)
-            return CVImageBufferGetColorSpace(self)?.takeUnretainedValue() ?? attachmentsDic.flatMap { CVImageBufferCreateColorSpaceFromAttachments($0)?.takeUnretainedValue() }
-            #else
-            return attachmentsDic.flatMap { CVImageBufferCreateColorSpaceFromAttachments($0)?.takeUnretainedValue() }
+            if let colorSpace = CVImageBufferGetColorSpace(self)?.takeUnretainedValue() { return colorSpace }
             #endif
+            return attachmentsDic.flatMap { CVImageBufferCreateColorSpaceFromAttachments($0)?.takeRetainedValue() }
         }
         set {
             if let newValue {

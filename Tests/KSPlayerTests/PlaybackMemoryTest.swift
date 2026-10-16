@@ -3,9 +3,74 @@ import Foundation
 @testable import KSPlayer
 import Libavutil
 import Libavformat
+import Metal
 import XCTest
 
 final class PlaybackMemoryTest: XCTestCase {
+    @MainActor
+    func testDisplayBackpressureStopsFrameConsumptionAndResumes() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("MetalPlayView requires a Metal device; display enqueue is tested independently")
+        }
+        let output = MetalPlayView(options: KSOptions())
+        defer { output.invalidate() }
+        let display = MemoryDisplayView(frame: .zero)
+        output.displayView = display
+        let source = MemoryVideoSource(pixelBuffer: try makePixelBuffer())
+        output.renderSource = source
+        output.readNextFrame()
+        XCTAssertEqual(source.framesRequested, 1)
+        XCTAssertEqual(source.videoTimes.count, 1)
+        XCTAssertEqual(display.testLayer.enqueuedCount, 1)
+
+        display.testLayer.ready = false
+        for _ in 0 ..< 1000 { output.readNextFrame() }
+        XCTAssertEqual(source.framesRequested, 1)
+        XCTAssertEqual(source.videoTimes.count, 1)
+        XCTAssertEqual(display.testLayer.enqueuedCount, 1)
+
+        display.testLayer.ready = true
+        output.readNextFrame()
+        XCTAssertEqual(source.framesRequested, 2)
+        XCTAssertEqual(source.videoTimes.count, 2)
+        XCTAssertEqual(display.testLayer.enqueuedCount, 2)
+    }
+
+    @MainActor
+    func testBusyDisplayRejectsFramesAndRecoversBeforeCheckingReadiness() throws {
+        let display = MemoryDisplayView(frame: .zero)
+        let pixelBuffer = try makePixelBuffer()
+        let format = try XCTUnwrap(pixelBuffer.formatDescription)
+        display.testLayer.ready = false
+        for _ in 0 ..< 1000 {
+            XCTAssertFalse(display.enqueue(imageBuffer: pixelBuffer, formatDescription: format, time: .zero))
+        }
+        XCTAssertEqual(display.testLayer.enqueuedCount, 0)
+        display.testLayer.needsFlush = true
+        XCTAssertTrue(display.enqueue(imageBuffer: pixelBuffer, formatDescription: format, time: .zero))
+        XCTAssertEqual(display.testLayer.flushedCount, 1)
+        XCTAssertEqual(display.testLayer.enqueuedCount, 1)
+    }
+
+    func testAttachedColorSpaceReadsDoNotAccumulateReferences() throws {
+        let pixelBuffer = try makePixelBuffer()
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.itur_2100_PQ))
+        pixelBuffer.colorspace = colorSpace
+        let baseline = CFGetRetainCount(colorSpace)
+        for _ in 0 ..< 1000 {
+            autoreleasepool {
+                XCTAssertTrue(pixelBuffer.colorspace === colorSpace)
+            }
+        }
+        XCTAssertEqual(CFGetRetainCount(colorSpace), baseline)
+    }
+
+    private func makePixelBuffer() throws -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 32, 32, kCVPixelFormatType_32BGRA, nil, &buffer), kCVReturnSuccess)
+        return try XCTUnwrap(buffer)
+    }
+
     func testPacketBytesSurviveGrowthWrapAndRejectedPop() {
         let queue = CircularBuffer<MemoryItem>(initialCapacity: 2)
         queue.push(MemoryItem(size: 3))
@@ -200,6 +265,48 @@ final class PlaybackMemoryTest: XCTestCase {
         }
         XCTFail("reader did not stop at its packet budget")
     }
+}
+
+@MainActor
+private final class MemoryDisplayView: AVSampleBufferDisplayView {
+    let testLayer = MemoryDisplayLayer()
+    override var displayLayer: AVSampleBufferDisplayLayer { testLayer }
+}
+
+@MainActor
+private final class MemoryDisplayLayer: AVSampleBufferDisplayLayer {
+    var ready = true
+    var needsFlush = false
+    var enqueuedCount = 0
+    var flushedCount = 0
+    override var isReadyForMoreMediaData: Bool { ready }
+    override var requiresFlushToResumeDecoding: Bool { needsFlush }
+    override func enqueue(_ sampleBuffer: CMSampleBuffer) { enqueuedCount += 1 }
+    override func flush() {
+        flushedCount += 1
+        needsFlush = false
+        ready = true
+    }
+}
+
+private final class MemoryVideoSource: OutputRenderSourceDelegate {
+    let pixelBuffer: CVPixelBuffer
+    var framesRequested = 0
+    var videoTimes = [CMTime]()
+
+    init(pixelBuffer: CVPixelBuffer) { self.pixelBuffer = pixelBuffer }
+    func getVideoOutputRender(force: Bool) -> VideoVTBFrame? {
+        framesRequested += 1
+        let frame = VideoVTBFrame(fps: 24, isDovi: false)
+        frame.timebase = Timebase(num: 1, den: 24)
+        frame.timestamp = Int64(framesRequested)
+        frame.corePixelBuffer = pixelBuffer
+        return frame
+    }
+
+    func getAudioOutputRender() -> AudioFrame? { nil }
+    func setAudio(time: CMTime, position: Int64) {}
+    func setVideo(time: CMTime, position: Int64) { videoTimes.append(time) }
 }
 
 private final class MemoryDelegate: MEPlayerDelegate {

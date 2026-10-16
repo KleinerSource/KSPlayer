@@ -248,6 +248,11 @@ extension MetalPlayView {
 
     private func draw(force: Bool) {
         autoreleasepool {
+            // Leave frames in the bounded decoder queue while the system
+            // renderer is full, so backpressure reaches the reader as well.
+            if pixelBuffer != nil, !requiresMetal, !displayView.prepareForEnqueue() {
+                return
+            }
             guard let frame = renderSource?.getVideoOutputRender(force: force) else {
                 return
             }
@@ -283,7 +288,7 @@ extension MetalPlayView {
                     pixelBuffer.aspectRatio = CGSize(width: dar.width, height: dar.height * par.width / par.height)
                 }
                 checkFormatDescription(pixelBuffer: pixelBuffer)
-                set(pixelBuffer: pixelBuffer, time: cmtime)
+                guard set(pixelBuffer: pixelBuffer, time: cmtime) else { return }
             } else {
                 if !displayView.isHidden {
                     displayView.isHidden = true
@@ -336,9 +341,9 @@ extension MetalPlayView {
         }
     }
 
-    private func set(pixelBuffer: CVPixelBuffer, time: CMTime) {
-        guard let formatDescription else { return }
-        displayView.enqueue(imageBuffer: pixelBuffer, formatDescription: formatDescription, time: time)
+    private func set(pixelBuffer: CVPixelBuffer, time: CMTime) -> Bool {
+        guard let formatDescription else { return false }
+        return displayView.enqueue(imageBuffer: pixelBuffer, formatDescription: formatDescription, time: time)
     }
 }
 
@@ -432,7 +437,21 @@ class AVSampleBufferDisplayView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func enqueue(imageBuffer: CVPixelBuffer, formatDescription: CMVideoFormatDescription, time: CMTime) {
+    func prepareForEnqueue() -> Bool {
+        if #available(macOS 11.0, iOS 14, tvOS 14, *) {
+            if displayLayer.requiresFlushToResumeDecoding {
+                displayLayer.flush()
+            }
+        }
+        if displayLayer.status == .failed {
+            displayLayer.flush()
+        }
+        return displayLayer.isReadyForMoreMediaData
+    }
+
+    @discardableResult
+    func enqueue(imageBuffer: CVPixelBuffer, formatDescription: CMVideoFormatDescription, time: CMTime) -> Bool {
+        guard prepareForEnqueue() else { return false }
         let timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
         //        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: time, decodeTimeStamp: .invalid)
         var sampleBuffer: CMSampleBuffer?
@@ -441,26 +460,10 @@ class AVSampleBufferDisplayView: UIView {
             if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true) as? [NSMutableDictionary], let dic = attachmentsArray.first {
                 dic[kCMSampleAttachmentKey_DisplayImmediately] = true
             }
-            if displayLayer.isReadyForMoreMediaData {
-                displayLayer.enqueue(sampleBuffer)
-            } else {
-                KSLog("[video] AVSampleBufferDisplayLayer not readyForMoreMediaData. video time \(time), controlTime \(displayLayer.timebase.time) ")
-                displayLayer.enqueue(sampleBuffer)
-            }
-            if #available(macOS 11.0, iOS 14, tvOS 14, *) {
-                if displayLayer.requiresFlushToResumeDecoding {
-                    KSLog("[video] AVSampleBufferDisplayLayer requiresFlushToResumeDecoding so flush")
-                    displayLayer.flush()
-                }
-            }
-            if displayLayer.status == .failed {
-                KSLog("[video] AVSampleBufferDisplayLayer status failed so flush")
-                displayLayer.flush()
-                //                    if let error = displayLayer.error as NSError?, error.code == -11847 {
-                //                        displayLayer.stopRequestingMediaData()
-                //                    }
-            }
+            displayLayer.enqueue(sampleBuffer)
+            return true
         }
+        return false
     }
 }
 
