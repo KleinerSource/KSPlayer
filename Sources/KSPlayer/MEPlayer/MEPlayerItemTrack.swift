@@ -266,12 +266,12 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        if decodeOperation.isFinished {
-            decode()
-        }
         packetQueue.flush()
         super.seek(time: time)
         loopPacketQueue = nil
+        if decodeOperation.isFinished {
+            decode()
+        }
     }
 
     override func shutdown() {
