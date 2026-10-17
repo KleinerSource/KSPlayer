@@ -4,6 +4,28 @@ import Libavutil
 import XCTest
 
 class AudioTest: XCTestCase {
+    func testSpeakerDownmixesSpatialMultichannelToStereo() {
+        for channels: AVAudioChannelCount in [6, 8] {
+            XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: channels, maximumChannelCount: 2, spatialAudio: true, audioRenderer: false, builtInSpeaker: true), 2)
+            XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: channels, maximumChannelCount: 8, spatialAudio: true, audioRenderer: true, builtInSpeaker: true), 2)
+        }
+    }
+
+    func testSpatialAudioEngineRespectsPhysicalOutputChannels() {
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 8, maximumChannelCount: 2, spatialAudio: true, audioRenderer: false, builtInSpeaker: false), 2)
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 8, maximumChannelCount: 6, spatialAudio: false, audioRenderer: false, builtInSpeaker: false), 6)
+    }
+
+    func testSpatialRendererAndExternalMultichannelRemainAvailable() {
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 8, maximumChannelCount: 2, spatialAudio: true, audioRenderer: true, builtInSpeaker: false), 8)
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 8, maximumChannelCount: 8, spatialAudio: false, audioRenderer: false, builtInSpeaker: false), 8)
+    }
+
+    func testUnknownRouteFallsBackToValidStereoAndMonoRouteIsSupported() {
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 6, maximumChannelCount: 0, spatialAudio: false, audioRenderer: false, builtInSpeaker: false), 2)
+        XCTAssertEqual(KSOptions.outputNumberOfChannels(channelCount: 6, maximumChannelCount: 1, spatialAudio: false, audioRenderer: false, builtInSpeaker: false), 1)
+    }
+
     func testSurroundDownmixDoesNotClip() throws {
         for channels: Int32 in [6, 8] {
             let output = try convert(channels: channels, activeChannels: Array(0 ..< Int(channels)))
@@ -60,7 +82,7 @@ class AudioTest: XCTestCase {
         let output = try XCTUnwrap(try converter.change(avframe: frame) as? AudioFrame)
         XCTAssertEqual(output.audioFormat.channelCount, 2)
         XCTAssertEqual(output.numberOfSamples, 1024)
-        return output.toFloat()
+        return output.toFloat().map { ContiguousArray($0.prefix(Int(output.numberOfSamples))) }
     }
 
     func testChannelLayout() {

@@ -575,33 +575,31 @@ public extension KSOptions {
         let isSpatialAudioEnabled = isSpatialAudioEnabled(channelCount: channelCount)
         let isUseAudioRenderer = KSOptions.audioPlayerType == AudioRendererPlayer.self
         KSLog("[audio] maximumOutputNumberOfChannels: \(maximumOutputNumberOfChannels), preferredOutputNumberOfChannels: \(preferredOutputNumberOfChannels), isSpatialAudioEnabled: \(isSpatialAudioEnabled), isUseAudioRenderer: \(isUseAudioRenderer) ")
-        let maxRouteChannelsCount = AVAudioSession.sharedInstance().currentRoute.outputs.compactMap {
-            $0.channels?.count
-        }.max() ?? 2
-        KSLog("[audio] currentRoute max channels: \(maxRouteChannelsCount)")
-        var channelCount = channelCount
-        if channelCount > 2 {
-            let minChannels = min(maximumOutputNumberOfChannels, channelCount)
-            #if os(tvOS) || targetEnvironment(simulator)
-            if !(isUseAudioRenderer && isSpatialAudioEnabled) {
-                // 不要用maxRouteChannelsCount来判断，有可能会不准。导致多音道设备也返回2（一开始播放一个2声道，就容易出现），也不能用outputNumberOfChannels来判断，有可能会返回2
-//                channelCount = AVAudioChannelCount(min(AVAudioSession.sharedInstance().outputNumberOfChannels, maxRouteChannelsCount))
-                channelCount = minChannels
-            }
-            #else
-            // iOS 外放是会自动有空间音频功能，但是蓝牙耳机有可能没有空间音频功能或者把空间音频给关了，。所以还是需要处理。
-            if !isSpatialAudioEnabled {
-                channelCount = minChannels
-            }
-            #endif
-        } else {
-            channelCount = 2
-        }
+        let channelCount = outputNumberOfChannels(
+            channelCount: channelCount,
+            maximumChannelCount: maximumOutputNumberOfChannels,
+            spatialAudio: isSpatialAudioEnabled,
+            audioRenderer: isUseAudioRenderer,
+            builtInSpeaker: AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+        )
         // 不在这里设置setPreferredOutputNumberOfChannels,因为这个方法会在获取音轨信息的时候，进行调用。
         KSLog("[audio] outputNumberOfChannels: \(AVAudioSession.sharedInstance().outputNumberOfChannels) output channelCount: \(channelCount)")
         return channelCount
     }
     #endif
+
+    static func outputNumberOfChannels(channelCount: AVAudioChannelCount, maximumChannelCount: AVAudioChannelCount, spatialAudio: Bool, audioRenderer: Bool, builtInSpeaker: Bool) -> AVAudioChannelCount {
+        // 空间音频能力不代表 AVAudioEngine 的 PCM 输出支持源文件的声道数。
+        // 手机外放先下混为立体声；只有 sample-buffer renderer 承担空间化时才保留源多声道。
+        let maximum = maximumChannelCount > 0 ? maximumChannelCount : 2
+        if builtInSpeaker {
+            return min(2, maximum)
+        }
+        if channelCount > 2, audioRenderer, spatialAudio {
+            return channelCount
+        }
+        return min(max(2, channelCount), maximum)
+    }
 }
 
 public enum LogLevel: Int32, CustomStringConvertible {
