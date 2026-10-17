@@ -62,6 +62,10 @@ class SubtitleDecode: DecodeProtocol {
             parts.append(SubtitlePart(0, 0, attributedString: nil))
         }
         for part in parts {
+            if part.image != nil {
+                part.imageCanvasSize = CGSize(width: CGFloat(codecContext.pointee.width),
+                                              height: CGFloat(codecContext.pointee.height))
+            }
             part.start = start
             if duration == 0 {
                 part.end = .infinity

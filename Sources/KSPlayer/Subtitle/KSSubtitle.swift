@@ -17,6 +17,8 @@ public class SubtitlePart: CustomStringConvertible, Identifiable {
     public var origin: CGPoint = .zero
     public let text: NSAttributedString?
     public var image: UIImage?
+    /// 位图字幕坐标系的完整画布尺寸；未知时使用视频尺寸。
+    public var imageCanvasSize: CGSize = .zero
     public var textPosition: TextPosition?
     public var description: String {
         "Subtile Group ==========\nstart: \(start)\nend:\(end)\ntext:\(String(describing: text))"

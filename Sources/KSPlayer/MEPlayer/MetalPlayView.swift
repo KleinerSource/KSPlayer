@@ -133,6 +133,7 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     override public var contentMode: UIViewContentMode {
         didSet {
+            if contentMode != oldValue { clearSubtitleLayers() }
             metalView.contentMode = contentMode
             switch contentMode {
             case .scaleToFill:
@@ -238,12 +239,14 @@ public final class MetalPlayView: UIView, VideoOutput {
             let image = part.image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
             #endif
             guard let image else { continue }
+            let canvas = part.imageCanvasSize
+            let sourceSize = canvas.width > 0 && canvas.height > 0 ? canvas : size
             let layer = CALayer()
             layer.contents = image
-            layer.frame = CGRect(x: rect.minX + part.origin.x * rect.width / size.width,
-                                 y: rect.minY + part.origin.y * rect.height / size.height,
-                                 width: CGFloat(image.width) * rect.width / size.width,
-                                 height: CGFloat(image.height) * rect.height / size.height)
+            layer.frame = CGRect(x: rect.minX + part.origin.x * rect.width / sourceSize.width,
+                                 y: rect.minY + part.origin.y * rect.height / sourceSize.height,
+                                 width: CGFloat(image.width) * rect.width / sourceSize.width,
+                                 height: CGFloat(image.height) * rect.height / sourceSize.height)
             subtitleLayer.addSublayer(layer)
         }
         CATransaction.commit()
