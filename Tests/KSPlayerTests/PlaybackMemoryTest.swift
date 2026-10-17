@@ -383,6 +383,49 @@ final class PlaybackMemoryTest: XCTestCase {
         await fulfillment(of: [completion], timeout: 5)
     }
 
+    @MainActor
+    func testFullTimeBufferCanResumeAndSeekRepeatedly() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let options = KSOptions()
+        options.hardwareDecode = false
+        options.maxBufferSize = 1
+        options.preferredForwardBufferDuration = 0
+        options.maxBufferDuration = 0.01
+        let item = MEPlayerItem(url: url, options: options)
+        let delegate = MemoryDelegate()
+        item.delegate = delegate
+        defer { item.shutdown() }
+        item.prepareToPlay()
+        XCTAssertEqual(delegate.opened.wait(timeout: .now() + 5), .success)
+        for iteration in 0 ..< 12 {
+            // The packet budget keeps the reader from reaching EOF. Capacity
+            // updates then pause it on the time budget, as during real playback.
+            try await Task.sleep(nanoseconds: 150_000_000)
+            item.codecDidChangeCapacity()
+            try await Task.sleep(nanoseconds: 20_000_000)
+            let sought = expectation(description: "paused reader seek \(iteration)")
+            item.seek(time: 0) { success in
+                XCTAssertTrue(success)
+                sought.fulfill()
+            }
+            await fulfillment(of: [sought], timeout: 2)
+            // Remove the time limit and consume frames: reading must restart
+            // without closing or replacing the input.
+            options.maxBufferDuration = 30
+            item.codecDidChangeCapacity()
+            var frames = 0
+            let deadline = Date(timeIntervalSinceNow: 2)
+            while frames < 3, Date() < deadline {
+                if item.getVideoOutputRender(force: true) != nil { frames += 1 }
+                item.codecDidChangeCapacity()
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            XCTAssertEqual(frames, 3, "reader must resume producing frames")
+            options.maxBufferDuration = 0.01
+        }
+    }
+
     private func assertReaderBackpressure(item: MEPlayerItem) {
         // No rendering consumes the 16 decoded frames. The reader must then
         // keep at most one compressed packet, even without the main-run-loop timer.
