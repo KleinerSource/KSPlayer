@@ -266,25 +266,11 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        let restartDecoder = state == .finished
         packetQueue.flush()
         super.seek(time: time)
         loopPacketQueue = nil
         if decodeOperation.isFinished {
             decode()
-        } else if restartDecoder {
-            // If EOF and seek race, the old decoder may still be unwinding.
-            // Wait off the reader thread and restart only after it is done;
-            // never enqueue a second decoder while the first is active.
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                guard let self else { return }
-                let deadline = CACurrentMediaTime() + 1
-                while !self.decodeOperation.isFinished, CACurrentMediaTime() < deadline {
-                    Thread.sleep(forTimeInterval: 0.01)
-                }
-                guard self.decodeOperation.isFinished, self.state != .closed else { return }
-                self.decode()
-            }
         }
     }
 
