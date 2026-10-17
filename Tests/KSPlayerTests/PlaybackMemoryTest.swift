@@ -383,7 +383,6 @@ final class PlaybackMemoryTest: XCTestCase {
         await fulfillment(of: [completion], timeout: 5)
     }
 
->>>>>>> parent of cc01409 (test(buffer): exercise repeated full-buffer resume and seek)
     private func assertReaderBackpressure(item: MEPlayerItem) {
         // No rendering consumes the 16 decoded frames. The reader must then
         // keep at most one compressed packet, even without the main-run-loop timer.
