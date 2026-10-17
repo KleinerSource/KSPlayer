@@ -74,7 +74,12 @@ final class PlaybackMemoryTest: XCTestCase {
                 if queue.count == 3 { _ = queue.pop() }
                 let output = try XCTUnwrap(try converter.change(avframe: frame) as? VideoVTBFrame)
                 XCTAssertEqual(output.corePixelBuffer?.width, 3840)
+                XCTAssertEqual(output.corePixelBuffer?.planeCount, 3)
+                #if !targetEnvironment(simulator)
+                // The simulator cannot alias shared MTLBuffers as linear textures.
+                // Still verify buffer/frame lifetime there; exercise textures on device.
                 XCTAssertEqual(output.corePixelBuffer?.textures().count, 3)
+                #endif
                 references.append(WeakVideoFrame(output))
                 queue.push(output)
             }
