@@ -602,7 +602,8 @@ extension MEPlayerItem {
                     guard let self else { return }
                     self.seekingCompletionHandler?(result >= 0)
                     self.seekingCompletionHandler = nil
-                }\n            } else if state == .reading {
+                }
+            } else if state == .reading {
                 // Check on the reader itself: a busy main run loop must not let
                 // high-bitrate 4K input outgrow the time-based capacity timer.
                 if packetBufferSize >= max(1, options.maxBufferSize) {
