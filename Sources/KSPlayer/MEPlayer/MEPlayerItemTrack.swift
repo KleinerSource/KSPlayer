@@ -222,33 +222,24 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func decode() {
-        decode(force: false)
-    }
-
-    private func decode(force: Bool) {
         isEndOfFile = false
-        // A seek can race the decoder as it observes .finished and exits.
-        // Queue one restart in that case even while the old operation is
-        // winding down; OperationQueue serializes it behind the old worker.
-        guard force || operationQueue.operationCount == 0 else { return }
-        var operation: BlockOperation!
-        operation = BlockOperation { [weak self, weak operation] in
-            guard let self, let operation else { return }
+        guard operationQueue.operationCount == 0 else { return }
+        decodeOperation = BlockOperation { [weak self] in
+            guard let self else { return }
             Thread.current.name = self.operationQueue.name
             Thread.current.stackSize = KSOptions.stackSize
-            self.decodeThread(operation: operation)
+            self.decodeThread()
         }
-        decodeOperation = operation
-        operation.queuePriority = .veryHigh
-        operation.qualityOfService = .userInteractive
-        operationQueue.addOperation(operation)
+        decodeOperation.queuePriority = .veryHigh
+        decodeOperation.qualityOfService = .userInteractive
+        operationQueue.addOperation(decodeOperation)
     }
 
-    private func decodeThread(operation: BlockOperation) {
+    private func decodeThread() {
         state = .decoding
         isEndOfFile = false
         decoderMap.values.forEach { $0.decode() }
-        outerLoop: while !operation.isCancelled {
+        outerLoop: while !decodeOperation.isCancelled {
             switch state {
             case .idle:
                 break outerLoop
@@ -275,13 +266,12 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        let restartDecoder = state == .finished
+        if decodeOperation.isFinished {
+            decode()
+        }
         packetQueue.flush()
         super.seek(time: time)
         loopPacketQueue = nil
-        if restartDecoder {
-            decode(force: true)
-        }
     }
 
     override func shutdown() {
