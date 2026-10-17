@@ -95,6 +95,7 @@ open class KSPlayerLayer: NSObject {
     @Published
     public private(set) var previewFrames = [KSPlayerPreviewFrame]()
     private var previewTask: Task<[KSPlayerPreviewFrame], Error>?
+    private var previewImageTask: Task<CGImage?, Never>?
 
     public private(set) var options: KSOptions
 
@@ -331,6 +332,8 @@ open class KSPlayerLayer: NSObject {
     }
 
     public func cancelPreviewThumbnails() {
+        previewImageTask?.cancel()
+        previewImageTask = nil
         previewTask?.cancel()
         previewTask = nil
     }
@@ -345,7 +348,17 @@ open class KSPlayerLayer: NSObject {
         if let previewTask {
             _ = try? await previewTask.value
         } else {
-            _ = try? await generatePreviewThumbnails()
+            // Hovering a network video must not scan the entire file for 100 images.
+            let player = player
+            let task = Task { await player.previewImage(at: time) }
+            previewImageTask?.cancel()
+            previewImageTask = task
+            let image = await withTaskCancellationHandler(operation: {
+                await task.value
+            }, onCancel: {
+                task.cancel()
+            })
+            return task.isCancelled ? nil : image
         }
         if let frame = previewFrames.min(by: { abs($0.time - time) < abs($1.time - time) }) {
             return frame.image
@@ -354,6 +367,7 @@ open class KSPlayerLayer: NSObject {
     }
 
     open func seek(time: TimeInterval, autoPlay: Bool, completion: @escaping ((Bool) -> Void)) {
+        cancelPreviewThumbnails()
         if time.isInfinite || time.isNaN {
             completion(false)
             return

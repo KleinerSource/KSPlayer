@@ -600,9 +600,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
         if let frame = previewFramesSnapshot().min(by: { abs($0.time - time) < abs($1.time - time) }) {
             return frame.image
         }
-        return (try? await generatePreviewThumbnails())?.min {
-            abs($0.time - time) < abs($1.time - time)
-        }?.image
+        return (try? await ThumbnailController(thumbnailCount: 1).generateThumbnail(for: sourceURL, at: time))?.first?.cgImage
     }
 
     private func setPreviewFrames(_ frames: [KSPlayerPreviewFrame]) {

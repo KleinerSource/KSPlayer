@@ -37,20 +37,26 @@ public class ThumbnailController {
         self.thumbnailCount = max(1, thumbnailCount)
     }
 
-    public func generateThumbnail(for url: URL, thumbWidth: Int32 = 240,
+    public func generateThumbnail(for url: URL, at time: TimeInterval? = nil, thumbWidth: Int32 = 240,
                                   onUpdate: (([FFThumbnail]) -> Void)? = nil) async throws -> [FFThumbnail]
     {
+        if let time, !time.isFinite || time < 0 {
+            throw NSError(description: "Invalid thumbnail time")
+        }
+        let cancellation = ThumbnailIOCancellation()
         let operation = Task {
-            try await getPeeks(for: url, thumbWidth: thumbWidth, onUpdate: onUpdate)
+            try await getPeeks(for: url, at: time, thumbWidth: thumbWidth, cancellation: cancellation, onUpdate: onUpdate)
         }
         return try await withTaskCancellationHandler(operation: {
             try await operation.value
         }, onCancel: {
+            cancellation.cancel()
             operation.cancel()
         })
     }
 
-    private func getPeeks(for url: URL, thumbWidth: Int32 = 240,
+    private func getPeeks(for url: URL, at time: TimeInterval?, thumbWidth: Int32,
+                          cancellation: ThumbnailIOCancellation,
                           onUpdate: (([FFThumbnail]) -> Void)? = nil) async throws -> [FFThumbnail]
     {
         let urlString: String
@@ -61,8 +67,17 @@ public class ThumbnailController {
         }
         var thumbnails = [FFThumbnail]()
         var formatCtx = avformat_alloc_context()
+        guard let input = formatCtx else { throw NSError(errorCode: .formatCreate) }
+        input.pointee.interrupt_callback = AVIOInterruptCB(
+            callback: { context in
+                guard let context else { return 0 }
+                return Unmanaged<ThumbnailIOCancellation>.fromOpaque(context).takeUnretainedValue().isCancelled ? 1 : 0
+            },
+            opaque: Unmanaged.passUnretained(cancellation).toOpaque()
+        )
         defer {
             avformat_close_input(&formatCtx)
+            withExtendedLifetime(cancellation) {}
         }
         var result = avformat_open_input(&formatCtx, urlString, nil, nil)
         guard result == 0, let formatCtx else {
@@ -108,8 +123,13 @@ public class ThumbnailController {
         guard duration > 0 else {
             throw NSError(description: "Invalid video duration")
         }
-        let sampleCount = max(1, min(thumbnailCount, Int(min(Int64(Int.max), duration))))
+        let sampleCount = time == nil ? max(1, min(thumbnailCount, Int(min(Int64(Int.max), duration)))) : 1
         let interval = max(1, duration / Int64(sampleCount))
+        let startTime = videoStream.pointee.start_time == Int64.min ? 0 : videoStream.pointee.start_time
+        let target = time.map {
+            av_rescale_q(Int64(min(max(0, $0), Double(formatCtx.pointee.duration) / Double(AV_TIME_BASE)) * Double(AV_TIME_BASE)),
+                         AVRational(num: 1, den: AV_TIME_BASE), videoStream.pointee.time_base) + startTime
+        }
         var packet = AVPacket()
         defer { av_packet_unref(&packet) }
         let timeBase = Timebase(videoStream.pointee.time_base)
@@ -122,7 +142,7 @@ public class ThumbnailController {
         }
         for i in 0 ..< sampleCount {
             try Task.checkCancellation()
-            let seek_pos = interval * Int64(i) + videoStream.pointee.start_time
+            let seek_pos = target ?? (interval * Int64(i) + startTime)
             avcodec_flush_buffers(codecContext)
             result = av_seek_frame(formatCtx, Int32(videoStreamIndex), seek_pos, AVSEEK_FLAG_BACKWARD)
             guard result == 0 else {
@@ -144,10 +164,11 @@ public class ThumbnailController {
                             break
                         }
                     }
+                    let currentTimeStamp = frame.pointee.best_effort_timestamp
+                    if let target, currentTimeStamp < target { continue }
                     let image = autoreleasepool {
                         reScale.transfer(frame: frame.pointee)?.cgImage().map { UIImage(cgImage: $0) }
                     }
-                    let currentTimeStamp = frame.pointee.best_effort_timestamp
                     if let image {
                         let thumbnail = FFThumbnail(image: image, time: timeBase.cmtime(for: currentTimeStamp).seconds)
                         thumbnails.append(thumbnail)
@@ -158,6 +179,24 @@ public class ThumbnailController {
                 }
             }
         }
+        try Task.checkCancellation()
         return thumbnails
+    }
+}
+
+private final class ThumbnailIOCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
     }
 }

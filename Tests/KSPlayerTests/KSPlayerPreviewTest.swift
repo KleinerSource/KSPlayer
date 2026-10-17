@@ -6,6 +6,15 @@ import XCTest
 final class KSPlayerPreviewTest: XCTestCase, MediaPlayerDelegate {
     private var readyExpectation: XCTestExpectation?
 
+    func testRequestedTimeProducesOnlyOneSmallFrame() async throws {
+        let url = try await DeterministicMediaFixture.videoURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let frames = try await ThumbnailController().generateThumbnail(for: url, at: 0.5)
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertGreaterThanOrEqual(frames.first?.time ?? 0, 0.5)
+        XCTAssertLessThanOrEqual(frames.first?.cgImage?.width ?? 0, 240)
+    }
+
     func testSinglePreviewDoesNotGenerateTheWholeTimeline() async throws {
         let url = try await DeterministicMediaFixture.videoURL()
         defer { try? FileManager.default.removeItem(at: url) }
