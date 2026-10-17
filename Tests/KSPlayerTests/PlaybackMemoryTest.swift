@@ -7,6 +7,37 @@ import Metal
 import XCTest
 
 final class PlaybackMemoryTest: XCTestCase {
+    func test4KTenBitPreviewRespectsRequestedSizeAndBoundsCachedImages() throws {
+        var input: UnsafeMutablePointer<AVFrame>? = try XCTUnwrap(av_frame_alloc())
+        defer { av_frame_free(&input) }
+        let frame = try XCTUnwrap(input)
+        frame.pointee.format = AV_PIX_FMT_YUV420P10LE.rawValue
+        frame.pointee.width = 3840
+        frame.pointee.height = 2160
+        XCTAssertEqual(av_frame_get_buffer(frame, 0), 0)
+        for plane in 0 ..< 3 {
+            memset(Array(tuple: frame.pointee.data)[plane], 0,
+                   Int(Array(tuple: frame.pointee.linesize)[plane]) * (plane == 0 ? 2160 : 1080))
+        }
+        let converter = VideoSwresample(dstWidth: 240, dstHeight: 135, isDovi: false)
+        defer { converter.shutdown() }
+        var images = [CGImage]()
+        for _ in 0 ..< 100 {
+            let image = try autoreleasepool { () throws -> CGImage in
+                let buffer = try XCTUnwrap(converter.transfer(frame: frame.pointee))
+                // Fail before generating a full-resolution cache on regression.
+                guard buffer.width == 240, buffer.height == 135 else {
+                    XCTFail("10-bit thumbnail resizing was bypassed: \(buffer.width)x\(buffer.height)")
+                    throw NSError(domain: "KSPlayerTests", code: 10)
+                }
+                return try XCTUnwrap(buffer.cgImage())
+            }
+            images.append(image)
+        }
+        XCTAssertEqual(images.count, 100)
+        XCTAssertLessThanOrEqual(images.reduce(0) { $0 + $1.bytesPerRow * $1.height }, 32 * 1024 * 1024)
+    }
+
     func test4KSoftwareFramesReleaseMetalBuffersAfterQueueShutdown() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
             throw XCTSkip("The 4K software-frame converter requires Metal")
