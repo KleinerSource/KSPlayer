@@ -7,6 +7,90 @@ import Metal
 import XCTest
 
 final class PlaybackMemoryTest: XCTestCase {
+    func test4KSoftwareFramesReleaseMetalBuffersAfterQueueShutdown() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("The 4K software-frame converter requires Metal")
+        }
+        var input: UnsafeMutablePointer<AVFrame>? = try XCTUnwrap(av_frame_alloc())
+        defer { av_frame_free(&input) }
+        let frame = try XCTUnwrap(input)
+        frame.pointee.format = AV_PIX_FMT_YUV420P10LE.rawValue
+        frame.pointee.width = 3840
+        frame.pointee.height = 2160
+        frame.pointee.color_primaries = AVCOL_PRI_BT2020
+        frame.pointee.colorspace = AVCOL_SPC_BT2020_NCL
+        frame.pointee.color_trc = AVCOL_TRC_SMPTE2084
+        XCTAssertEqual(av_frame_get_buffer(frame, 0), 0)
+        for plane in 0 ..< 3 {
+            let data = Array(tuple: frame.pointee.data)[plane]
+            let stride = Array(tuple: frame.pointee.linesize)[plane]
+            memset(data, 0, Int(stride) * (plane == 0 ? 2160 : 1080))
+        }
+        let converter = VideoSwresample(fps: 24, isDovi: false)
+        defer { converter.shutdown() }
+        let queue = CircularBuffer<VideoVTBFrame>(initialCapacity: 4, expanding: false)
+        var references = [WeakVideoFrame]()
+        for _ in 0 ..< 128 {
+            try autoreleasepool {
+                if queue.count == 3 { _ = queue.pop() }
+                let output = try XCTUnwrap(try converter.change(avframe: frame) as? VideoVTBFrame)
+                XCTAssertEqual(output.corePixelBuffer?.width, 3840)
+                XCTAssertEqual(output.corePixelBuffer?.textures().count, 3)
+                references.append(WeakVideoFrame(output))
+                queue.push(output)
+            }
+            XCTAssertEqual(references.filter { $0.value != nil }.count, min(references.count, 3))
+        }
+        queue.shutdown()
+        XCTAssertTrue(references.allSatisfy { $0.value == nil })
+    }
+
+    func test4KVideoToolboxFramesKeepOnlyQueuedPixelBufferReferences() throws {
+        var pixelBuffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 3840, 2160, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                                         nil, &pixelBuffer), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(pixelBuffer)
+        var input: UnsafeMutablePointer<AVFrame>? = try XCTUnwrap(av_frame_alloc())
+        defer { av_frame_free(&input) }
+        let frame = try XCTUnwrap(input)
+        frame.pointee.format = AV_PIX_FMT_VIDEOTOOLBOX.rawValue
+        // Borrow the CV buffer just as FFmpeg exposes it in data[3]. The test
+        // owns the original reference; only converted queued frames may add one.
+        frame.pointee.data.3 = Unmanaged.passUnretained(buffer).toOpaque().assumingMemoryBound(to: UInt8.self)
+        let baseline = CFGetRetainCount(buffer)
+        let converter = VideoSwresample(fps: 24, isDovi: true)
+        defer { converter.shutdown() }
+        let queue = CircularBuffer<VideoVTBFrame>(initialCapacity: 4, expanding: false)
+        for _ in 0 ..< 128 {
+            try autoreleasepool {
+                if queue.count == 3 { _ = queue.pop() }
+                let output = try XCTUnwrap(try converter.change(avframe: frame) as? VideoVTBFrame)
+                XCTAssertTrue(output.corePixelBuffer?.cvPixelBuffer === buffer)
+                queue.push(output)
+            }
+            XCTAssertEqual(CFGetRetainCount(buffer), baseline + queue.count)
+        }
+        queue.shutdown()
+        XCTAssertEqual(CFGetRetainCount(buffer), baseline)
+    }
+
+    @MainActor
+    func testShutdownReleasesItemsEvenWhenNoReadOperationWasStarted() async {
+        var references = [WeakPlayerItem]()
+        for _ in 0 ..< 256 {
+            autoreleasepool {
+                let item = MEPlayerItem(url: URL(fileURLWithPath: "/unused-memory-fixture"), options: KSOptions())
+                references.append(WeakPlayerItem(item))
+                item.shutdown()
+            }
+        }
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while references.contains(where: { $0.value != nil }), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(references.allSatisfy { $0.value == nil }, "shutdown must break the close-operation retain cycle")
+    }
+
     @MainActor
     func testDisplayBackpressureStopsFrameConsumptionAndResumes() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
@@ -265,6 +349,16 @@ final class PlaybackMemoryTest: XCTestCase {
         }
         XCTFail("reader did not stop at its packet budget")
     }
+}
+
+private final class WeakVideoFrame {
+    weak var value: VideoVTBFrame?
+    init(_ value: VideoVTBFrame) { self.value = value }
+}
+
+private final class WeakPlayerItem {
+    weak var value: MEPlayerItem?
+    init(_ value: MEPlayerItem) { self.value = value }
 }
 
 @MainActor
