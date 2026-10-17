@@ -532,9 +532,11 @@ extension MEPlayerItem {
         }
         allPlayerItemTracks.forEach { $0.decode() }
         while [MESourceState.paused, .seeking, .reading].contains(state) {
-            if state == .paused {
+            condition.lock()
+            while state == .paused {
                 condition.wait()
             }
+            condition.unlock()
             if state == .seeking {
                 let seekToTime = seekTime
                 let time = mainClock().time
@@ -702,12 +704,16 @@ extension MEPlayerItem {
     }
 
     private func pause() {
+        condition.lock()
+        defer { condition.unlock() }
         if state == .reading {
             state = .paused
         }
     }
 
     private func resume() {
+        condition.lock()
+        defer { condition.unlock() }
         if state == .paused {
             state = .reading
             condition.signal()
@@ -759,8 +765,11 @@ extension MEPlayerItem: MediaPlayback {
         ioLock.lock()
         ioCancelled = true
         ioLock.unlock()
-        guard state != .closed else { return }
+        condition.lock()
+        guard state != .closed else { condition.unlock(); return }
         state = .closed
+        condition.broadcast()
+        condition.unlock()
         av_packet_free(&outputPacket)
         stopRecord()
         // 故意循环引用。等结束了。才释放
@@ -792,7 +801,6 @@ extension MEPlayerItem: MediaPlayback {
         // Publish the owner before the operation can run and clear it.
         self.closeOperation = closeOperation
         operationQueue.addOperation(closeOperation)
-        condition.signal()
         if options.syncDecodeVideo || options.syncDecodeAudio {
             DispatchQueue.global().async { [weak self] in
                 self?.allPlayerItemTracks.forEach { $0.shutdown() }
@@ -807,20 +815,27 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
+        condition.lock()
         if state == .reading || state == .paused {
             seekTime = time
             state = .seeking
             seekingCompletionHandler = completion
             condition.broadcast()
+            condition.unlock()
             allPlayerItemTracks.forEach { $0.seek(time: time) }
         } else if state == .finished {
             seekTime = time
             state = .seeking
             seekingCompletionHandler = completion
+            condition.unlock()
             read()
         } else if state == .seeking {
             seekTime = time
             seekingCompletionHandler = completion
+            condition.unlock()
+        } else {
+            condition.unlock()
+            completion(false)
         }
         isAudioStalled = audioTrack == nil
     }
@@ -835,6 +850,9 @@ extension MEPlayerItem: CodecCapacityDelegate {
         // Wake a reader blocked on the failed decoder's full packet queue.
         allPlayerItemTracks.forEach { $0.shutdown() }
         self.error = error as NSError
+        condition.lock()
+        condition.broadcast()
+        condition.unlock()
     }
 
     func codecDidChangeCapacity() {
