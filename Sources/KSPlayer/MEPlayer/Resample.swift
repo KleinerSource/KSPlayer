@@ -234,13 +234,13 @@ class AudioSwresample: FrameChange {
 
     private func setup(descriptor: AudioDescriptor) -> Bool {
         var result = swr_alloc_set_opts2(&swrContext, &descriptor.outChannel, descriptor.audioFormat.sampleFormat, Int32(descriptor.audioFormat.sampleRate), &descriptor.channel, descriptor.sampleFormat, descriptor.sampleRate, 0, nil)
-        guard result >= 0 else {
+        guard result >= 0, let context = swrContext else {
             shutdown()
             return false
         }
         if descriptor.channel.nb_channels > descriptor.outChannel.nb_channels {
             // 浮点下混默认允许峰值超过 1，最终输出到扬声器时会削波失真。
-            result = av_opt_set_double(swrContext, "rematrix_maxval", 1, 0)
+            result = av_opt_set_double(UnsafeMutableRawPointer(context), "rematrix_maxval", 1, 0)
             guard result >= 0 else {
                 shutdown()
                 return false
