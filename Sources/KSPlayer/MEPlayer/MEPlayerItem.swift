@@ -789,6 +789,8 @@ extension MEPlayerItem: MediaPlayback {
             openOperation.cancel()
             closeOperation.addDependency(openOperation)
         }
+        // Publish the owner before the operation can run and clear it.
+        self.closeOperation = closeOperation
         operationQueue.addOperation(closeOperation)
         condition.signal()
         if options.syncDecodeVideo || options.syncDecodeAudio {
@@ -796,7 +798,6 @@ extension MEPlayerItem: MediaPlayback {
                 self?.allPlayerItemTracks.forEach { $0.shutdown() }
             }
         }
-        self.closeOperation = closeOperation
     }
 
     func stopRecord() {

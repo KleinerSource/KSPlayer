@@ -8,16 +8,24 @@ import XCTest
 
 final class PlaybackMemoryTest: XCTestCase {
     func test4KTenBitPreviewRespectsRequestedSizeAndBoundsCachedImages() throws {
+        try assertPreviewCache(format: AV_PIX_FMT_YUV420P10LE, width: 3840, height: 2160)
+    }
+
+    func test1080pEightBitPreviewRespectsRequestedSizeAndBoundsCachedImages() throws {
+        try assertPreviewCache(format: AV_PIX_FMT_YUV420P, width: 1920, height: 1080)
+    }
+
+    private func assertPreviewCache(format: AVPixelFormat, width: Int32, height: Int32) throws {
         var input: UnsafeMutablePointer<AVFrame>? = try XCTUnwrap(av_frame_alloc())
         defer { av_frame_free(&input) }
         let frame = try XCTUnwrap(input)
-        frame.pointee.format = AV_PIX_FMT_YUV420P10LE.rawValue
-        frame.pointee.width = 3840
-        frame.pointee.height = 2160
+        frame.pointee.format = format.rawValue
+        frame.pointee.width = width
+        frame.pointee.height = height
         XCTAssertEqual(av_frame_get_buffer(frame, 0), 0)
         for plane in 0 ..< 3 {
             memset(Array(tuple: frame.pointee.data)[plane], 0,
-                   Int(Array(tuple: frame.pointee.linesize)[plane]) * (plane == 0 ? 2160 : 1080))
+                   Int(Array(tuple: frame.pointee.linesize)[plane]) * Int(plane == 0 ? height : height / 2))
         }
         let converter = VideoSwresample(dstWidth: 240, dstHeight: 135, isDovi: false)
         defer { converter.shutdown() }
@@ -27,7 +35,7 @@ final class PlaybackMemoryTest: XCTestCase {
                 let buffer = try XCTUnwrap(converter.transfer(frame: frame.pointee))
                 // Fail before generating a full-resolution cache on regression.
                 guard buffer.width == 240, buffer.height == 135 else {
-                    XCTFail("10-bit thumbnail resizing was bypassed: \(buffer.width)x\(buffer.height)")
+                    XCTFail("Thumbnail resizing was bypassed: \(buffer.width)x\(buffer.height)")
                     throw NSError(domain: "KSPlayerTests", code: 10)
                 }
                 return try XCTUnwrap(buffer.cgImage())
@@ -77,32 +85,33 @@ final class PlaybackMemoryTest: XCTestCase {
     }
 
     func test4KVideoToolboxFramesKeepOnlyQueuedPixelBufferReferences() throws {
-        var pixelBuffer: CVPixelBuffer?
-        XCTAssertEqual(CVPixelBufferCreate(nil, 3840, 2160, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-                                         nil, &pixelBuffer), kCVReturnSuccess)
-        let buffer = try XCTUnwrap(pixelBuffer)
         var input: UnsafeMutablePointer<AVFrame>? = try XCTUnwrap(av_frame_alloc())
         defer { av_frame_free(&input) }
         let frame = try XCTUnwrap(input)
         frame.pointee.format = AV_PIX_FMT_VIDEOTOOLBOX.rawValue
-        // Borrow the CV buffer just as FFmpeg exposes it in data[3]. The test
-        // owns the original reference; only converted queued frames may add one.
-        frame.pointee.data.3 = Unmanaged.passUnretained(buffer).toOpaque().assumingMemoryBound(to: UInt8.self)
-        let baseline = CFGetRetainCount(buffer)
         let converter = VideoSwresample(fps: 24, isDovi: true)
         defer { converter.shutdown() }
         let queue = CircularBuffer<VideoVTBFrame>(initialCapacity: 4, expanding: false)
+        var references = [WeakPixelBuffer]()
         for _ in 0 ..< 128 {
             try autoreleasepool {
                 if queue.count == 3 { _ = queue.pop() }
+                var pixelBuffer: CVPixelBuffer?
+                XCTAssertEqual(CVPixelBufferCreate(nil, 3840, 2160, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                                                 nil, &pixelBuffer), kCVReturnSuccess)
+                let buffer = try XCTUnwrap(pixelBuffer)
+                references.append(WeakPixelBuffer(buffer))
+                // data[3] borrows the buffer; only queued frames keep it alive.
+                frame.pointee.data.3 = Unmanaged.passUnretained(buffer).toOpaque().assumingMemoryBound(to: UInt8.self)
                 let output = try XCTUnwrap(try converter.change(avframe: frame) as? VideoVTBFrame)
                 XCTAssertTrue(output.corePixelBuffer?.cvPixelBuffer === buffer)
                 queue.push(output)
             }
-            XCTAssertEqual(CFGetRetainCount(buffer), baseline + queue.count)
+            XCTAssertEqual(references.filter { $0.value != nil }.count, queue.count)
         }
+        frame.pointee.data.3 = nil
         queue.shutdown()
-        XCTAssertEqual(CFGetRetainCount(buffer), baseline)
+        XCTAssertTrue(references.allSatisfy { $0.value == nil })
     }
 
     @MainActor
@@ -385,6 +394,11 @@ final class PlaybackMemoryTest: XCTestCase {
 private final class WeakVideoFrame {
     weak var value: VideoVTBFrame?
     init(_ value: VideoVTBFrame) { self.value = value }
+}
+
+private final class WeakPixelBuffer {
+    weak var value: CVPixelBuffer?
+    init(_ value: CVPixelBuffer) { self.value = value }
 }
 
 private final class WeakPlayerItem {

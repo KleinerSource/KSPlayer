@@ -130,6 +130,7 @@ public class ThumbnailController {
             }
             avcodec_flush_buffers(codecContext)
             while av_read_frame(formatCtx, &packet) >= 0 {
+                defer { av_packet_unref(&packet) }
                 try Task.checkCancellation()
                 if packet.stream_index == Int32(videoStreamIndex) {
                     if avcodec_send_packet(codecContext, &packet) < 0 {
@@ -143,8 +144,8 @@ public class ThumbnailController {
                             break
                         }
                     }
-                    let image = reScale.transfer(frame: frame.pointee)?.cgImage().map {
-                        UIImage(cgImage: $0)
+                    let image = autoreleasepool {
+                        reScale.transfer(frame: frame.pointee)?.cgImage().map { UIImage(cgImage: $0) }
                     }
                     let currentTimeStamp = frame.pointee.best_effort_timestamp
                     if let image {

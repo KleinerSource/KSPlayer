@@ -114,14 +114,15 @@ class VideoSwresample: FrameChange {
             // AV_PIX_FMT_VIDEOTOOLBOX格式是无法进行swscale的
             imgConvertCtx = sws_getCachedContext(imgConvertCtx, width, height, self.format, dstWidth, dstHeight, dstFormat, Int32(SWS_FAST_BILINEAR.rawValue), nil, nil, nil)
         }
-        pool = CVPixelBufferPool.create(width: dstWidth, height: dstHeight, bytesPerRowAlignment: linesize, pixelFormatType: pixelFormatType)
+        pool = CVPixelBufferPool.create(width: dstWidth, height: dstHeight,
+                                        bytesPerRowAlignment: imgConvertCtx == nil ? linesize : 64, pixelFormatType: pixelFormatType)
     }
 
     func transfer(frame: AVFrame) -> PixelBufferProtocol? {
         let format = AVPixelFormat(rawValue: frame.format)
         let width = frame.width
         let height = frame.height
-        if format.leftShift > 0 {
+        if format.leftShift > 0, dstWidth == nil, dstHeight == nil, dstFormat == nil {
             return PixelBuffer(frame: frame)
         }
         let pbuf = transfer(format: format, width: width, height: height, data: Array(tuple: frame.data), linesize: Array(tuple: frame.linesize))
