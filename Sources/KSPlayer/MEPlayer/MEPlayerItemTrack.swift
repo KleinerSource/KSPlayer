@@ -222,24 +222,33 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func decode() {
-        isEndOfFile = false
-        guard operationQueue.operationCount == 0 else { return }
-        decodeOperation = BlockOperation { [weak self] in
-            guard let self else { return }
-            Thread.current.name = self.operationQueue.name
-            Thread.current.stackSize = KSOptions.stackSize
-            self.decodeThread()
-        }
-        decodeOperation.queuePriority = .veryHigh
-        decodeOperation.qualityOfService = .userInteractive
-        operationQueue.addOperation(decodeOperation)
+        decode(force: false)
     }
 
-    private func decodeThread() {
+    private func decode(force: Bool) {
+        isEndOfFile = false
+        // A seek can race the decoder as it observes .finished and exits.
+        // Queue one restart in that case even while the old operation is
+        // winding down; OperationQueue serializes it behind the old worker.
+        guard force || operationQueue.operationCount == 0 else { return }
+        var operation: BlockOperation!
+        operation = BlockOperation { [weak self, weak operation] in
+            guard let self, let operation else { return }
+            Thread.current.name = self.operationQueue.name
+            Thread.current.stackSize = KSOptions.stackSize
+            self.decodeThread(operation: operation)
+        }
+        decodeOperation = operation
+        operation.queuePriority = .veryHigh
+        operation.qualityOfService = .userInteractive
+        operationQueue.addOperation(operation)
+    }
+
+    private func decodeThread(operation: BlockOperation) {
         state = .decoding
         isEndOfFile = false
         decoderMap.values.forEach { $0.decode() }
-        outerLoop: while !decodeOperation.isCancelled {
+        outerLoop: while !operation.isCancelled {
             switch state {
             case .idle:
                 break outerLoop
@@ -266,12 +275,13 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        if decodeOperation.isFinished {
-            decode()
-        }
+        let restartDecoder = state == .finished
         packetQueue.flush()
         super.seek(time: time)
         loopPacketQueue = nil
+        if restartDecoder {
+            decode(force: true)
+        }
     }
 
     override func shutdown() {
