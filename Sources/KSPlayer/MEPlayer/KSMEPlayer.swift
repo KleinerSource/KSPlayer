@@ -796,10 +796,12 @@ private extension KSMEPlayer {
 
     func connectSubtitleRenderer() {
         (videoOutput as? MetalPlayView)?.imageSubtitleProvider = { [weak self] in
-            guard let self, self.sessionActive, self.isReadyToPlay else { return [] }
-            return self.tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }
+            guard let self, self.sessionActive, self.isReadyToPlay else { return nil }
+            let tracks = self.tracks(mediaType: .subtitle).compactMap { $0 as? FFmpegAssetTrack }
                 .filter { $0.isEnabled && $0.isImageSubtitle }
-                .flatMap { $0.search(for: self.displayedVideoTime - $0.delay) }
+            guard !tracks.isEmpty else { return nil }
+            let time = self.displayedVideoTime - self.subtitleDelay
+            return (time, tracks.flatMap { $0.search(for: time) })
         }
     }
 

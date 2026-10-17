@@ -80,8 +80,9 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     private let metalView = MetalView()
-    var imageSubtitleProvider: (() -> [SubtitlePart])?
+    var imageSubtitleProvider: (() -> (time: TimeInterval, parts: [SubtitlePart])?)?
     private let subtitleLayer = CALayer()
+    private var imageSubtitleParts = [SubtitlePart]()
     private var subtitleTimer: Timer?
     public weak var displayLayerDelegate: DisplayLayerDelegate?
     public init(options: KSOptions) {
@@ -93,6 +94,7 @@ public final class MetalPlayView: UIView, VideoOutput {
         subtitleLayer.isGeometryFlipped = true
         #endif
         subtitleLayer.masksToBounds = true
+        subtitleLayer.zPosition = 1
         backingLayer?.addSublayer(subtitleLayer)
         subtitleTimer = .scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             self?.updateImageSubtitles()
@@ -184,6 +186,11 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     func clearSubtitles() {
+        imageSubtitleParts.removeAll()
+        clearSubtitleLayers()
+    }
+
+    private func clearSubtitleLayers() {
         subtitleLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
         displayedSubtitleIDs = []
         subtitleBounds = .zero
@@ -191,14 +198,24 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     private var displayedSubtitleIDs: [ObjectIdentifier] = []
     private var subtitleBounds = CGRect.zero
-    private func updateImageSubtitles() {
-        let parts = imageSubtitleProvider?().filter { $0.image != nil } ?? []
+    func updateImageSubtitles() {
+        guard let snapshot = imageSubtitleProvider?() else {
+            clearSubtitles()
+            return
+        }
+        // search 会消费队列；没有新字幕时，继续显示仍在有效期内的位图。
+        // 空白清屏帧也必须替换缓存，再过滤 image，才能结束无限时长的 PGS。
+        if !snapshot.parts.isEmpty {
+            imageSubtitleParts = snapshot.parts
+        }
+        imageSubtitleParts = imageSubtitleParts.filter { $0 == snapshot.time }
+        let parts = imageSubtitleParts.filter { $0.image != nil }
         let ids = parts.map(ObjectIdentifier.init)
         guard ids != displayedSubtitleIDs || subtitleBounds != bounds else { return }
-        clearSubtitles()
+        clearSubtitleLayers()
+        guard let size = pixelBuffer?.size, size.width > 0, size.height > 0 else { return }
         displayedSubtitleIDs = ids
         subtitleBounds = bounds
-        guard let size = pixelBuffer?.size, size.width > 0, size.height > 0 else { return }
         let aspectSize = CGSize(width: size.width, height: size.height * (pixelBuffer?.aspectRatio.height ?? 1) / max(pixelBuffer?.aspectRatio.width ?? 1, 0.001))
         let rect: CGRect
         if contentMode == .scaleToFill {
@@ -328,7 +345,7 @@ extension MetalPlayView {
 
     private func checkFormatDescription(pixelBuffer: PixelBufferProtocol) {
         if formatDescription == nil || !pixelBuffer.matche(formatDescription: formatDescription!) {
-            clearSubtitles()
+            clearSubtitleLayers()
             if formatDescription != nil {
                 let hidden = displayView.isHidden
                 displayView.removeFromSuperview()
