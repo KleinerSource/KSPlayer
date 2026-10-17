@@ -389,7 +389,7 @@ final class PlaybackMemoryTest: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let options = KSOptions()
         options.hardwareDecode = false
-        options.maxBufferSize = 1
+        options.maxBufferSize = 64 * 1024 * 1024
         options.preferredForwardBufferDuration = 0
         options.maxBufferDuration = 0.01
         let item = MEPlayerItem(url: url, options: options)
