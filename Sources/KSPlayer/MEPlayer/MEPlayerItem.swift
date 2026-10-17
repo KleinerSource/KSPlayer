@@ -589,15 +589,20 @@ extension MEPlayerItem {
                 }
                 isSeek = true
                 allPlayerItemTracks.forEach { $0.seek(time: seekToTime) }
+                audioClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
+                videoClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
+                // Publish the resumed state while holding the same condition
+                // used by pause/seek. A reader blocked by the buffer limit must
+                // observe this transition and be woken after every seek.
+                condition.lock()
+                state = .reading
+                condition.broadcast()
+                condition.unlock()
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.seekingCompletionHandler?(result >= 0)
                     self.seekingCompletionHandler = nil
-                }
-                audioClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
-                videoClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
-                state = .reading
-            } else if state == .reading {
+                }\n            } else if state == .reading {
                 // Check on the reader itself: a busy main run loop must not let
                 // high-bitrate 4K input outgrow the time-based capacity timer.
                 if packetBufferSize >= max(1, options.maxBufferSize) {

@@ -49,7 +49,19 @@ public class CircularBuffer<Item: ObjectQueueItem> {
     public func push(_ value: Item) {
         condition.lock()
         defer { condition.unlock() }
-        if destroyed {
+        guard !destroyed else {
+            return
+        }
+        // Wait before reserving a slot. The old implementation wrote the item
+        // and advanced tailIndex before waiting for room. A concurrent seek
+        // flush could then clear that slot and wake the producer, causing the
+        // producer to report success while silently dropping the frame. This
+        // is especially easy to hit when a bounded decoder queue is flushed
+        // during repeated seeks.
+        while !expanding && _count >= maxCount && !destroyed {
+            condition.wait()
+        }
+        guard !destroyed else {
             return
         }
         if _buffer[Int(tailIndex & mask)] != nil {
@@ -62,7 +74,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             var index = tailIndex
             while index > headIndex {
                 guard let item = _buffer[Int((index - 1) & mask)] else {
-                    assertionFailure("value is nil of index: \((index - 1) & mask) headIndex: \(headIndex),tailIndex: \(tailIndex), bufferCount: \(_buffer.count),  mask: \(mask)")
+                    assertionFailure("value is nil of index: \((index - 1) & mask) headIndex: \(headIndex),tailIndex: \(tailIndex), bufferCount: \(_buffer.count), mask: \(mask)")
                     break
                 }
                 if item.timestamp <= _buffer[Int(index & mask)]!.timestamp {
@@ -77,17 +89,12 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             if expanding {
                 // No more room left for another append so grow the buffer now.
                 _doubleCapacity()
-            } else {
-                condition.wait()
             }
-        } else {
+        } else if _count == 1 {
             // 只有数据了。就signal。因为有可能这是最后的数据了。
-            if _count == 1 {
-                condition.signal()
-            }
+            condition.signal()
         }
     }
-
     public func pop(wait: Bool = false, where predicate: ((Item, Int) -> Bool)? = nil) -> Item? {
         condition.lock()
         defer { condition.unlock() }
