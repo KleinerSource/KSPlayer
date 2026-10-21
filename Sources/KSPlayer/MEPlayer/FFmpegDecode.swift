@@ -45,6 +45,10 @@ class FFmpegDecode: DecodeProtocol {
         updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
         var retryPacket = sendResult == AVError.tryAgain.code
         if sendResult < 0, !retryPacket, sendResult != AVError.eof.code {
+            if packet.assetTrack.mediaType == .video, sendResult == AVError.invalidData.code {
+                KSLog("Skipping invalid video packet: \(AVError.invalidData)")
+                return
+            }
             completionHandler(.failure(NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: sendResult)))
             return
         }
@@ -67,12 +71,14 @@ class FFmpegDecode: DecodeProtocol {
             }
         }
 
+        var receivedFrame = false
         while true {
             let result = avcodec_receive_frame(codecContext, coreFrame)
             // Format negotiation can first happen inside receive_frame. Record
             // the selected backend even when that first hardware frame fails.
             updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
             if result == 0, let inputFrame = coreFrame {
+                receivedFrame = true
                 if packet.assetTrack.mediaType == .video {
                     if inputFrame.pointee.format == AV_PIX_FMT_VIDEOTOOLBOX.rawValue {
                         packet.assetTrack.actualDecoder = "VideoToolbox (FFmpeg)"
@@ -190,14 +196,24 @@ class FFmpegDecode: DecodeProtocol {
                         let retryResult = avcodec_send_packet(codecContext, packet.corePacket)
                         updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
                         if retryResult == 0 { continue }
-                        if retryResult != AVError.tryAgain.code, retryResult != AVError.eof.code {
+                        if retryResult != AVError.tryAgain.code, retryResult != AVError.eof.code,
+                           !(packet.assetTrack.mediaType == .video && retryResult == AVError.invalidData.code)
+                        {
                             completionHandler(.failure(NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: retryResult)))
                         }
                     }
                     break
                 } else {
+                    // 与 SenPlayer 一致：本次已经收过有效帧时保留输出，下一包
+                    // 再判断是否持续失败，不用随后一次收帧错误抹掉本次成功。
+                    if receivedFrame, packet.assetTrack.mediaType == .video { break }
                     let error = NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: result)
                     KSLog(error)
+                    // seek 后参考帧尚未齐全或单个压缩包损坏时，继续等待后续视频包。
+                    // 只跳过 INVALIDDATA；设备、内存及其他解码故障仍交给会话恢复。
+                    if packet.assetTrack.mediaType == .video, result == AVError.invalidData.code {
+                        break
+                    }
                     completionHandler(.failure(error))
                     break
                 }

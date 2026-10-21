@@ -340,6 +340,8 @@ extension AVCodecID {
             return .mpeg4Video
         case AV_CODEC_ID_VP9:
             return CMFormatDescription.MediaSubType(rawValue: kCMVideoCodecType_VP9)
+        case AV_CODEC_ID_AV1:
+            return CMFormatDescription.MediaSubType(rawValue: 0x61763031) // av01
         case AV_CODEC_ID_AAC:
             return .mpeg4AAC
         case AV_CODEC_ID_AC3:

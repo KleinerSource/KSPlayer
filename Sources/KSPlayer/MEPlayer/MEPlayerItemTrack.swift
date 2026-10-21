@@ -157,6 +157,8 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                     self.outputRenderQueue.fps = packet.assetTrack.nominalFrameRate
                 }
             } catch {
+                // seek/关闭已作废当前解码输出，迟到的错误也必须随之作废。
+                guard self.state != .flush, self.state != .closed else { return }
                 KSLog("Decoder did Failed : \(error)")
                 if decoder is VideoToolboxDecode {
                     decoder.shutdown()

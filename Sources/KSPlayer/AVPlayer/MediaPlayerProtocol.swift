@@ -145,6 +145,7 @@ public protocol MediaPlayerTrack: AnyObject, CustomStringConvertible {
     var dovi: DOVIDecoderConfigurationRecord? { get }
     var fieldOrder: FFmpegFieldOrder { get }
     var formatDescription: CMFormatDescription? { get }
+    var naturalSize: CGSize { get }
 }
 
 // public extension MediaPlayerTrack: Identifiable {

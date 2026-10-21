@@ -5,10 +5,43 @@
 //
 
 @testable import KSPlayer
+import CoreMedia
 import FFmpegKit
 import XCTest
 
 final class FFmpegAssetTrackTest: XCTestCase {
+    func testAv1UsesItsOwnSampleEntryAndConfigurationAtom() {
+        XCTAssertEqual(AV_CODEC_ID_AV1.mediaSubType.rawValue, 0x61763031)
+        XCTAssertEqual(FourCharCode(0x61763031).avc, "av1C")
+    }
+
+    func testAv1KeepsDimensionsAndRationalFrameRateWithoutSystemDecoder() throws {
+        let context = avformat_alloc_context()
+        defer { avformat_free_context(context) }
+        let stream = try XCTUnwrap(avformat_new_stream(try XCTUnwrap(context), nil))
+        let parameters = try XCTUnwrap(stream.pointee.codecpar)
+        parameters.pointee.codec_type = AVMEDIA_TYPE_VIDEO
+        parameters.pointee.codec_id = AV_CODEC_ID_AV1
+        parameters.pointee.width = 1920
+        parameters.pointee.height = 1080
+        parameters.pointee.format = AV_PIX_FMT_YUV420P10LE.rawValue
+        stream.pointee.time_base = AVRational(num: 1001, den: 24000)
+        stream.pointee.duration = 240
+        stream.pointee.nb_frames = 240
+        let track: any MediaPlayerTrack = try XCTUnwrap(FFmpegAssetTrack(stream: stream))
+        XCTAssertEqual(track.naturalSize, CGSize(width: 1920, height: 1080))
+        XCTAssertEqual(track.nominalFrameRate, 24000.0 / 1001.0, accuracy: 0.001)
+
+        stream.pointee.duration = 120
+        let faster = try XCTUnwrap(FFmpegAssetTrack(stream: stream))
+        XCTAssertEqual(faster.nominalFrameRate, 48000.0 / 1001.0, accuracy: 0.001)
+        stream.pointee.duration = 0
+        stream.pointee.avg_frame_rate = AVRational(num: 0, den: 1)
+        stream.pointee.r_frame_rate = AVRational(num: 30000, den: 1001)
+        let realRate = try XCTUnwrap(FFmpegAssetTrack(stream: stream))
+        XCTAssertEqual(realRate.nominalFrameRate, 30000.0 / 1001.0, accuracy: 0.001)
+    }
+
     func testDoviSideDataRejectsInvalidPointerFromPlaybackCrash() {
         let sideData = UnsafeMutablePointer<AVPacketSideData>(bitPattern: 0x1e5d35)
         XCTAssertNil(FFmpegAssetTrack.doviConfiguration(codedSideData: sideData, count: 24))

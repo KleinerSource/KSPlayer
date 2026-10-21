@@ -38,7 +38,13 @@ public final class MEPlayerItem: Sendable {
         defer { ioLock.unlock() }
         let timedOut = !ioCancelled && ioDeadline.map { CACurrentMediaTime() >= $0 } == true
         ioDeadline = nil
-        return timedOut ? -Int32(ETIMEDOUT) : result
+        return Self.completedIOResult(result, deadlineExpired: timedOut)
+    }
+
+    static func completedIOResult(_ result: Int32, deadlineExpired: Bool) -> Int32 {
+        // 只把截止时间触发的主动中断转换为超时。成功读到的包、EOF 和真实
+        // 解码/网络错误不能因返回时刚好超过截止时间而被改写。
+        deadlineExpired && result == AVError.exit.code ? -Int32(ETIMEDOUT) : result
     }
     private var formatCtx: UnsafeMutablePointer<AVFormatContext>?
     private var outputFormatCtx: UnsafeMutablePointer<AVFormatContext>?
@@ -628,6 +634,15 @@ extension MEPlayerItem {
         let readResult = finishIO(av_read_frame(formatCtx, corePacket))
         if state == .closed {
             return 0
+        }
+        if readResult == AVError.tryAgain.code {
+            // 非阻塞输入暂时无包，避免退出会话或忙循环；seek/关闭可唤醒。
+            condition.lock()
+            if state == .reading {
+                _ = condition.wait(until: Date(timeIntervalSinceNow: 0.01))
+            }
+            condition.unlock()
+            return readResult
         }
         if readResult == 0 {
             if let outputFormatCtx, let formatCtx {

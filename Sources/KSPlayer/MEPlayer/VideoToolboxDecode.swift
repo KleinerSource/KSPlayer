@@ -211,6 +211,8 @@ extension CMVideoCodecType {
             return "hvcC"
         case kCMVideoCodecType_VP9:
             return "vpcC"
+        case 0x61763031: // av01
+            return "av1C"
         default: return "avcC"
         }
     }

@@ -4,6 +4,14 @@ import Libavutil
 import XCTest
 
 final class PlaybackRecoveryTest: XCTestCase {
+    func testIODeadlineDoesNotTurnSuccessfulPacketsOrEOFIntoTimeout() {
+        XCTAssertEqual(MEPlayerItem.completedIOResult(0, deadlineExpired: true), 0)
+        XCTAssertEqual(MEPlayerItem.completedIOResult(AVError.eof.code, deadlineExpired: true), AVError.eof.code)
+        XCTAssertEqual(MEPlayerItem.completedIOResult(AVError.invalidData.code, deadlineExpired: true), AVError.invalidData.code)
+        XCTAssertEqual(MEPlayerItem.completedIOResult(AVError.exit.code, deadlineExpired: false), AVError.exit.code)
+        XCTAssertEqual(MEPlayerItem.completedIOResult(AVError.exit.code, deadlineExpired: true), -Int32(ETIMEDOUT))
+    }
+
     func testLogsRedactCredentialsAndStreamKeys() {
         let originalLogger = KSOptions.logger
         let originalLevel = KSOptions.logLevel

@@ -51,6 +51,13 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
     }
     public let fieldOrder: FFmpegFieldOrder
     public let formatDescription: CMFormatDescription?
+    public var naturalSize: CGSize {
+        if let size = formatDescription?.naturalSize, size.width > 0, size.height > 0 {
+            return size
+        }
+        // AV1 等软解轨道不应依赖当前系统能否创建压缩格式描述。
+        return CGSize(width: max(0, Int(codecpar.width)), height: max(0, Int(codecpar.height)))
+    }
     var closedCaptionsTrack: FFmpegAssetTrack?
     let isConvertNALSize: Bool
     var seekByBytes = false
@@ -92,7 +99,7 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         self.init(codecpar: codecpar)
         self.stream = stream
         let metadata = toDictionary(stream.pointee.metadata)
-        if let value = metadata["variant_bitrate"] ?? metadata["BPS"], let bitRate = Int64(value) {
+        if let value = metadata["variant_bitrate"] ?? metadata["BPS"] ?? metadata["BPS-eng"], let bitRate = Int64(value), bitRate > 0 {
             self.bitRate = bitRate
         }
         trackID = stream.pointee.index
@@ -113,10 +120,12 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 codecID: codecpar.codec_id
             )
         } else {
-            if stream.pointee.duration > 0, stream.pointee.nb_frames > 0, stream.pointee.nb_frames != stream.pointee.duration {
-                nominalFrameRate = Float(stream.pointee.nb_frames) * Float(timebase.den) / Float(stream.pointee.duration) * Float(timebase.num)
+            if stream.pointee.duration > 0, stream.pointee.nb_frames > 0 {
+                nominalFrameRate = Float(Double(stream.pointee.nb_frames) * Double(timebase.den) / (Double(stream.pointee.duration) * Double(timebase.num)))
             } else if avgFrameRate.den > 0, avgFrameRate.num > 0 {
                 nominalFrameRate = Float(avgFrameRate.num) / Float(avgFrameRate.den)
+            } else if realFrameRate.den > 0, realFrameRate.num > 0 {
+                nominalFrameRate = Float(realFrameRate.num) / Float(realFrameRate.den)
             } else {
                 nominalFrameRate = 24
             }
@@ -238,7 +247,7 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
             let atomsData: Data?
             if let extradata {
                 extradataSize = codecpar.extradata_size
-                if extradataSize >= 5, extradata[4] == 0xFE {
+                if [AV_CODEC_ID_H264, AV_CODEC_ID_HEVC].contains(codecpar.codec_id), extradataSize >= 5, extradata[4] == 0xFE {
                     extradata[4] = 0xFF
                     isConvertNALSize = true
                 } else {
