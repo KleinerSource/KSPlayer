@@ -28,9 +28,12 @@ struct PlaybackRecovery {
         let isVideoStage = [KSPlayerErrorCode.codesContextOpen.rawValue,
                             KSPlayerErrorCode.codecVideoSendPacket.rawValue,
                             KSPlayerErrorCode.codecVideoReceiveFrame.rawValue].contains(error.code)
+        // FFmpeg reports an invalid VideoToolbox session as UNKNOWN after
+        // scheduling a reconfiguration. Non-key frames wait for that retry in
+        // FFmpegDecode; an UNKNOWN key frame reaches here and falls back once.
         // Corrupt packets and missing RPU are not hardware terminal failures.
         if hardware, isVideoStage, !usedSoftwareDecode,
-           [Int32(swift_AVERROR_EXTERNAL), -12903, -12911, -12913].contains(underlying.code)
+           [Int32(swift_AVERROR_EXTERNAL), AVError.unknown.code, -12903, -12911, -12913].contains(underlying.code)
         {
             usedSoftwareDecode = true
             return .softwareDecode

@@ -45,6 +45,16 @@ class FFmpegDecode: DecodeProtocol {
         updateDecoder(assetTrack: packet.assetTrack, context: codecContext)
         var retryPacket = sendResult == AVError.tryAgain.code
         if sendResult < 0, !retryPacket, sendResult != AVError.eof.code {
+            let isVideo = packet.assetTrack.mediaType == .video
+            let isVideoToolbox = codecContext.pointee.pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX || codecContext.pointee.hw_device_ctx != nil
+            if Self.shouldWaitForVideoToolboxReconfiguration(
+                result: sendResult,
+                isVideo: isVideo,
+                isKeyFrame: packet.isKeyFrame,
+                isVideoToolbox: isVideoToolbox
+            ) {
+                return
+            }
             if packet.assetTrack.mediaType == .video, sendResult == AVError.invalidData.code {
                 KSLog("Skipping invalid video packet: \(AVError.invalidData)")
                 return
@@ -207,6 +217,16 @@ class FFmpegDecode: DecodeProtocol {
                     // 与 SenPlayer 一致：本次已经收过有效帧时保留输出，下一包
                     // 再判断是否持续失败，不用随后一次收帧错误抹掉本次成功。
                     if receivedFrame, packet.assetTrack.mediaType == .video { break }
+                    let isVideo = packet.assetTrack.mediaType == .video
+                    let isVideoToolbox = codecContext.pointee.pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX || codecContext.pointee.hw_device_ctx != nil
+                    if Self.shouldWaitForVideoToolboxReconfiguration(
+                        result: result,
+                        isVideo: isVideo,
+                        isKeyFrame: packet.isKeyFrame,
+                        isVideoToolbox: isVideoToolbox
+                    ) {
+                        break
+                    }
                     let error = NSError(errorCode: packet.assetTrack.mediaType == .audio ? .codecAudioReceiveFrame : .codecVideoReceiveFrame, avErrorCode: result)
                     KSLog(error)
                     // seek 后参考帧尚未齐全或单个压缩包损坏时，继续等待后续视频包。
@@ -219,6 +239,18 @@ class FFmpegDecode: DecodeProtocol {
                 }
             }
         }
+    }
+
+    /// FFmpeg marks an invalid VideoToolbox session for reconfiguration but
+    /// reports UNKNOWN for the current packet. Let the next packet perform the
+    /// restart; a key-frame failure still escalates to the bounded fallback.
+    static func shouldWaitForVideoToolboxReconfiguration(
+        result: Int32,
+        isVideo: Bool,
+        isKeyFrame: Bool,
+        isVideoToolbox: Bool
+    ) -> Bool {
+        result == AVError.unknown.code && isVideo && !isKeyFrame && isVideoToolbox
     }
 
     private func updateDecoder(assetTrack: FFmpegAssetTrack, context: UnsafeMutablePointer<AVCodecContext>) {

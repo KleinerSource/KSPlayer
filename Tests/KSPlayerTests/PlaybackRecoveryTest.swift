@@ -64,6 +64,49 @@ final class PlaybackRecoveryTest: XCTestCase {
         XCTAssertNil(recovery.next(error: error, streaming: true, hardware: true))
     }
 
+    func testVideoToolboxUnknownErrorWaitsForReconfigurationOnlyBeforeKeyFrame() {
+        XCTAssertTrue(FFmpegDecode.shouldWaitForVideoToolboxReconfiguration(
+            result: AVError.unknown.code,
+            isVideo: true,
+            isKeyFrame: false,
+            isVideoToolbox: true
+        ))
+        XCTAssertFalse(FFmpegDecode.shouldWaitForVideoToolboxReconfiguration(
+            result: AVError.unknown.code,
+            isVideo: true,
+            isKeyFrame: true,
+            isVideoToolbox: true
+        ))
+        XCTAssertFalse(FFmpegDecode.shouldWaitForVideoToolboxReconfiguration(
+            result: AVError.unknown.code,
+            isVideo: true,
+            isKeyFrame: false,
+            isVideoToolbox: false
+        ))
+        XCTAssertFalse(FFmpegDecode.shouldWaitForVideoToolboxReconfiguration(
+            result: AVError.unknown.code,
+            isVideo: false,
+            isKeyFrame: false,
+            isVideoToolbox: true
+        ))
+        XCTAssertFalse(FFmpegDecode.shouldWaitForVideoToolboxReconfiguration(
+            result: Int32(swift_AVERROR_EXTERNAL),
+            isVideo: true,
+            isKeyFrame: false,
+            isVideoToolbox: true
+        ))
+    }
+
+    func testVideoToolboxUnknownErrorFallsBackToSoftwareOnce() {
+        let error = NSError(errorCode: .codecVideoReceiveFrame, avErrorCode: AVError.unknown.code)
+        var hardwareRecovery = PlaybackRecovery()
+        XCTAssertEqual(hardwareRecovery.next(error: error, streaming: false, hardware: true), .softwareDecode)
+        XCTAssertNil(hardwareRecovery.next(error: error, streaming: false, hardware: true))
+
+        var softwareRecovery = PlaybackRecovery()
+        XCTAssertNil(softwareRecovery.next(error: error, streaming: false, hardware: false))
+    }
+
     func testStreamingDefaultsPreserveExplicitTransportAndSRTParameters() {
         let options = KSOptions()
         let rtsp = URL(string: "rtsp://example.invalid/live")!
