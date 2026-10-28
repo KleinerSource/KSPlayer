@@ -8,10 +8,10 @@
 import AVFoundation
 import CoreGraphics
 import CoreMedia
-import Libavcodec
-import Libavutil
-import Libswresample
-import Libswscale
+import libavcodec
+import libavutil
+import libswresample
+import libswscale
 
 protocol FrameTransfer {
     func transfer(avframe: UnsafeMutablePointer<AVFrame>) -> UnsafeMutablePointer<AVFrame>

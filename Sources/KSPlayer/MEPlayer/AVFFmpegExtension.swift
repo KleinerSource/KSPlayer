@@ -1,8 +1,8 @@
 import CoreMedia
-import FFmpegKit
-import Libavcodec
-import Libavfilter
-import Libavformat
+import KSFFmpegBridge
+import libavcodec
+import libavfilter
+import libavformat
 
 func toDictionary(_ native: OpaquePointer?) -> [String: String] {
     var dict = [String: String]()

@@ -5,8 +5,8 @@
 //  Created by kintan on 2018/8/7.
 //
 import Foundation
-import Libavcodec
-import Libavutil
+import libavcodec
+import libavutil
 
 extension FFmpegAssetTrack: SubtitleInfo {
     public var subtitleID: String {

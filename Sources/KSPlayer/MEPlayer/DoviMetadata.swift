@@ -1,5 +1,5 @@
 import Foundation
-import Libavutil
+import libavutil
 import simd
 
 /// A value copy of the public FFmpeg 8.1 metadata. No AVFrame or RPU pointers

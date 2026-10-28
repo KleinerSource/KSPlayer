@@ -1,6 +1,6 @@
 @testable import KSPlayer
-import FFmpegKit
-import Libavutil
+import KSFFmpegBridge
+import libavutil
 import XCTest
 
 final class PlaybackRecoveryTest: XCTestCase {

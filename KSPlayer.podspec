@@ -28,7 +28,8 @@ Pod::Spec.new do |s|
         'KSPlayer_KSPlayer' => ['Sources/KSPlayer/Metal/*.metal']
     }
     s.dependency 'DisplayCriteria'
-    s.dependency 'FFmpegKit', '8.1.0'
+    s.dependency 'KSFFmpegBridge'
+    s.dependency 'FFmpegKitNext', '9.0.2'
     s.test_spec 'Tests' do |test_spec|
         test_spec.source_files = 'Tests/KSPlayerTests/*.swift'
         test_spec.resources = 'Tests/KSPlayerTests/Resources/*'

@@ -1,11 +1,12 @@
 @testable import KSPlayer
-import Libavcodec
-import Libavformat
-import Libavutil
+import libavcodec
+import libavformat
+import libavutil
 import XCTest
 
 final class FFmpegRuntimeTest: XCTestCase {
     func testMatchingRuntimeIsAccepted() {
+        XCTAssertTrue(String(cString: av_version_info()).contains("9.0.2"))
         XCTAssertTrue(MEPlayerItem.isFFmpegRuntimeCompatible(formatVersion: avformat_version(),
                                                             codecVersion: avcodec_version(),
                                                             utilVersion: avutil_version()))

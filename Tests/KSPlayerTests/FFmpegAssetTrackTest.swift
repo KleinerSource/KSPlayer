@@ -6,7 +6,7 @@
 
 @testable import KSPlayer
 import CoreMedia
-import FFmpegKit
+import KSFFmpegBridge
 import XCTest
 
 final class FFmpegAssetTrackTest: XCTestCase {

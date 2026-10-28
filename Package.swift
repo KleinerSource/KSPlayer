@@ -16,13 +16,14 @@ let package = Package(
         ),
     ],
     targets: [
+        .target(name: "KSFFmpegBridge",
+                dependencies: [.product(name: "ffmpeg-kit", package: "FFmpegKitNext")]),
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.
         .target(
             name: "KSPlayer",
             dependencies: [
-                .product(name: "FFmpegKit", package: "FFmpegKit"),
-//                .product(name: "Libass", package: "FFmpegKit"),
-//                .product(name: "Libmpv", package: "FFmpegKit"),
+                "KSFFmpegBridge",
+                .product(name: "ffmpeg-kit", package: "FFmpegKitNext"),
                 "DisplayCriteria",
             ],
             resources: [.process("Metal/Shaders.metal")],
@@ -42,5 +43,5 @@ let package = Package(
 )
 
 package.dependencies += [
-    .package(path: "../FFmpegKit"),
+    .package(name: "FFmpegKitNext", path: ProcessInfo.processInfo.environment["FFMPEGKITNEXT_PACKAGE"] ?? "../FFmpegKitNext"),
 ]

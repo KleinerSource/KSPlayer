@@ -8,7 +8,7 @@
 import AVFoundation
 import CoreVideo
 import Foundation
-import Libavutil
+import libavutil
 import simd
 import VideoToolbox
 #if canImport(UIKit)

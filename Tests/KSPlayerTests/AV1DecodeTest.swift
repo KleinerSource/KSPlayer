@@ -1,5 +1,5 @@
 import AVFoundation
-import Libavformat
+import libavformat
 @testable import KSPlayer
 import XCTest
 

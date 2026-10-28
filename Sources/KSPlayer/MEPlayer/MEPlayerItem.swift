@@ -6,11 +6,11 @@
 //
 
 import AVFoundation
-import FFmpegKit
-import Libavcodec
-import Libavfilter
-import Libavformat
-import Libavutil
+import KSFFmpegBridge
+import libavcodec
+import libavfilter
+import libavformat
+import libavutil
 
 public final class MEPlayerItem: Sendable {
     private let url: URL
@@ -220,7 +220,7 @@ extension MEPlayerItem {
                                              codecVersion: avcodec_version(),
                                              utilVersion: avutil_version())
         else {
-            error = NSError(description: "FFmpeg ABI mismatch: rebuild with the matching FFmpegKit libraries.")
+            error = NSError(description: "FFmpeg ABI mismatch: rebuild with the matching official FFmpegKitNext libraries.")
             return
         }
         releaseCustomIO()

@@ -6,8 +6,8 @@
 //
 
 import AVFoundation
-import FFmpegKit
-import Libavformat
+import KSFFmpegBridge
+import libavformat
 
 public class FFmpegAssetTrack: MediaPlayerTrack {
     public private(set) var trackID: Int32 = 0
@@ -243,7 +243,7 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                                           count: codecpar.nb_coded_side_data)
             let sar = codecpar.sample_aspect_ratio.size
             var extradataSize = Int32(0)
-            var extradata = codecpar.extradata
+            let extradata = codecpar.extradata
             let atomsData: Data?
             if let extradata {
                 extradataSize = codecpar.extradata_size
@@ -256,21 +256,10 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 atomsData = Data(bytes: extradata, count: Int(extradataSize))
             } else {
                 if codecType.rawValue == kCMVideoCodecType_VP9 {
-                    // ff_videotoolbox_vpcc_extradata_create
-                    var ioContext: UnsafeMutablePointer<AVIOContext>?
-                    guard avio_open_dyn_buf(&ioContext) == 0 else {
+                    guard let configuration = vp9Configuration(codecpar) else {
                         return nil
                     }
-                    ff_isom_write_vpcc(nil, ioContext, nil, 0, &self.codecpar)
-                    extradataSize = avio_close_dyn_buf(ioContext, &extradata)
-                    guard let extradata else {
-                        return nil
-                    }
-                    var data = Data()
-                    var array: [UInt8] = [1, 0, 0, 0]
-                    data.append(&array, count: 4)
-                    data.append(extradata, count: Int(extradataSize))
-                    atomsData = data
+                    atomsData = configuration
                 } else {
                     atomsData = nil
                 }
