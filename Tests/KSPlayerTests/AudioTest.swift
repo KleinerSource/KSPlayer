@@ -1,6 +1,6 @@
 import AVFoundation
 @testable import KSPlayer
-import Libavutil
+import libavutil
 import XCTest
 
 class AudioTest: XCTestCase {

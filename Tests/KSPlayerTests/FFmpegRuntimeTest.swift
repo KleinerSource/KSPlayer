@@ -1,7 +1,7 @@
 @testable import KSPlayer
-import Libavcodec
-import Libavformat
-import Libavutil
+import libavcodec
+import libavformat
+import libavutil
 import XCTest
 
 final class FFmpegRuntimeTest: XCTestCase {

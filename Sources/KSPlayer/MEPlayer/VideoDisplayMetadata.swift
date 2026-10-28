@@ -1,5 +1,5 @@
 import Foundation
-import Libavutil
+import libavutil
 
 /// Copies frame properties before the decoder reuses an AVFrame. SMPTE ST
 /// 2086 / CTA-861.3 payloads use the byte order and units required by CoreVideo.

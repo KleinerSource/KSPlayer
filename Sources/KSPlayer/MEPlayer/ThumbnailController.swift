@@ -7,8 +7,8 @@
 
 import AVFoundation
 import Foundation
-import Libavcodec
-import Libavformat
+import libavcodec
+import libavformat
 #if canImport(UIKit)
 import UIKit
 #endif

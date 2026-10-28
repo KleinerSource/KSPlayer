@@ -8,7 +8,7 @@
 import AVFoundation
 import AVKit
 import Foundation
-import Libavutil
+import libavutil
 #if canImport(UIKit)
 import UIKit
 #else

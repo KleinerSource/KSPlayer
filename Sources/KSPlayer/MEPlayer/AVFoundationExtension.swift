@@ -7,8 +7,8 @@
 
 import AVFoundation
 import CoreMedia
-import FFmpegKit
-import Libavutil
+import KSFFmpegBridge
+import libavutil
 
 extension OSType {
     var bitDepth: Int32 {

@@ -6,7 +6,7 @@
 //
 import AVFoundation
 import CoreMedia
-import Libavformat
+import libavformat
 
 protocol PlayerItemTrackProtocol: CapacityProtocol, AnyObject {
     init(mediaType: AVFoundation.AVMediaType, frameCapacity: UInt8, options: KSOptions)

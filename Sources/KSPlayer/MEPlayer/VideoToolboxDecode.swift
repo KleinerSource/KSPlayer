@@ -5,8 +5,8 @@
 //  Created by kintan on 2018/3/10.
 //
 
-import FFmpegKit
-import Libavformat
+import KSFFmpegBridge
+import libavformat
 #if canImport(VideoToolbox)
 import VideoToolbox
 

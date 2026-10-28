@@ -1,5 +1,5 @@
 import CoreGraphics
-import Libavcodec
+import libavcodec
 @testable import KSPlayer
 import XCTest
 

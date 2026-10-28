@@ -1,5 +1,5 @@
 import Foundation
-import FFmpegKit
+import KSFFmpegBridge
 
 /// One budget per media session; successful reconnects do not reset the limit.
 struct PlaybackRecovery {

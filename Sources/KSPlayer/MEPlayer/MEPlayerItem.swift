@@ -6,11 +6,11 @@
 //
 
 import AVFoundation
-import FFmpegKit
-import Libavcodec
-import Libavfilter
-import Libavformat
-import Libavutil
+import KSFFmpegBridge
+import libavcodec
+import libavfilter
+import libavformat
+import libavutil
 
 public final class MEPlayerItem: Sendable {
     private let url: URL

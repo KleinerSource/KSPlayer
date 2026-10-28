@@ -7,7 +7,7 @@
 
 import CoreGraphics
 import Foundation
-import Libavformat
+import libavformat
 #if canImport(UIKit)
 import UIKit
 #else

@@ -1,8 +1,8 @@
 import AVFoundation
 import Foundation
 @testable import KSPlayer
-import Libavutil
-import Libavformat
+import libavutil
+import libavformat
 import Metal
 import XCTest
 

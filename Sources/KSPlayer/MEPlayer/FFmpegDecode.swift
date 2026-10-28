@@ -7,7 +7,7 @@
 
 import AVFoundation
 import Foundation
-import Libavcodec
+import libavcodec
 
 class FFmpegDecode: DecodeProtocol {
     private let options: KSOptions
