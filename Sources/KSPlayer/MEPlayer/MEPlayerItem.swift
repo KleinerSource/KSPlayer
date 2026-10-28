@@ -220,7 +220,7 @@ extension MEPlayerItem {
                                              codecVersion: avcodec_version(),
                                              utilVersion: avutil_version())
         else {
-            error = NSError(description: "FFmpeg ABI mismatch: rebuild with the matching FFmpegKit libraries.")
+            error = NSError(description: "FFmpeg ABI mismatch: rebuild with the matching official FFmpegKitNext libraries.")
             return
         }
         releaseCustomIO()
